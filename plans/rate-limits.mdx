@@ -1,7 +1,7 @@
 ---
-title: "API Rate Limits and Throttling in Quikko"
+title: "Quikko Rate Limiting: Endpoints, Defaults, and Configuration"
 sidebarTitle: "Rate Limits"
-description: "Quikko enforces per-IP and per-user rate limits using Redis. Redirect, URL creation, login, and registration each have independent configurable limits."
+description: "Quikko enforces per-IP and per-user Redis rate limits on four endpoints. Learn the env var names, default values, 429 response schema, and tuning guidance."
 ---
 
 Quikko uses Redis-backed rate limiting to protect all API endpoints from abuse. Limits are applied per-IP for public endpoints (redirect and authentication) and per-user for authenticated endpoints such as URL creation. Every limit is independently configurable via environment variables, so you can tune thresholds for your traffic profile without touching application code.

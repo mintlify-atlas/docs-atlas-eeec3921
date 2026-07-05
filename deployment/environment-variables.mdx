@@ -1,5 +1,5 @@
 ---
-title: "Environment Variables Reference for Quikko"
+title: "Quikko Go Backend: Environment Variables Reference"
 sidebarTitle: "Environment Variables"
 description: "Complete reference for all Quikko backend environment variables including server, database, JWT, GeoIP, rate limits, and plan configuration."
 ---
@@ -60,8 +60,10 @@ FREE_PLAN_MAX_ACTIVE_URLS=5
 ```
 
 <Warning>
-  `MONGO_URI`, `INFLUX_TOKEN`, and `JWT_SECRET` are required. The server exits
-  at startup if any of these three variables are missing or empty.
+  `MONGO_URI` and `JWT_SECRET` are formally required — the server exits at
+  startup if either is missing or empty. `INFLUX_TOKEN` is not checked at
+  startup but analytics writes will fail silently without a valid token; always
+  set it in any environment where click tracking is needed.
 </Warning>
 
 ## Server
@@ -128,9 +130,11 @@ FREE_PLAN_MAX_ACTIVE_URLS=5
   data that powers the analytics dashboard.
 </ParamField>
 
-<ParamField path="INFLUX_TOKEN" type="string" required>
-  InfluxDB API token. Required — must match the token configured when the
-  InfluxDB instance was initialised. In the Docker Compose setup this is
+<ParamField path="INFLUX_TOKEN" type="string">
+  InfluxDB API token. Not enforced at startup, but analytics writes will fail
+  without a valid token — always set this in any environment where click
+  tracking is needed. Must match the token configured during InfluxDB
+  initialisation. In the Docker Compose setup this corresponds to
   `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN`.
 </ParamField>
 
@@ -153,13 +157,14 @@ FREE_PLAN_MAX_ACTIVE_URLS=5
 </ParamField>
 
 <ParamField path="JWT_ACCESS_TOKEN_TTL" type="duration" default="15m">
-  Lifetime of short-lived access tokens. Accepts Go duration strings suffixed
-  with `s`, `m`, or `h` (e.g. `15m`, `1h`).
+  Lifetime of short-lived access tokens. Accepts duration strings suffixed with
+  `s`, `m`, `h`, or `d` (e.g. `30s`, `15m`, `1h`, `1d`). The `d` suffix for
+  days is handled by a custom parser — it is not a standard Go duration unit.
 </ParamField>
 
 <ParamField path="JWT_REFRESH_TOKEN_TTL" type="duration" default="7d">
   Lifetime of long-lived refresh tokens. Accepts the same duration strings as
-  `JWT_ACCESS_TOKEN_TTL`, plus a `d` suffix for days (e.g. `7d`, `30d`).
+  `JWT_ACCESS_TOKEN_TTL` — including the `d` suffix for days (e.g. `7d`, `30d`).
 </ParamField>
 
 ## GeoIP

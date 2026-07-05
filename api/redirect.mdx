@@ -1,7 +1,7 @@
 ---
-title: "Public Redirect Endpoint: GET /{code}"
+title: "Redirect API: Public Short-Code Resolution (GET /{code})"
 sidebarTitle: "Redirect"
-description: "The public redirect endpoint resolves a short code via Redis-first lookup and responds with HTTP 302. Click recording and GeoIP detection happen asynchronously."
+description: "Public endpoint that resolves a short code via Redis-first lookup and responds HTTP 302. Click recording and GeoIP detection are fully asynchronous."
 ---
 
 The redirect endpoint is the highest-traffic path in Quikko. It resolves short codes from Redis (cache hit) or MongoDB (cache miss), responds with HTTP 302 immediately, and records click analytics asynchronously — keeping redirect latency minimal. No authentication is required; this is a fully public endpoint.
@@ -37,15 +37,15 @@ Resolves a Quikko short code and redirects the caller to the original destinatio
 
 ### Response codes
 
-| HTTP | Description |
-|------|-------------|
-| 302 | Redirect to the original URL via `Location` header |
-| 302 | URL not found — redirected to `{FRONTEND_URL}/link-no-encontrado` |
-| 302 | URL is deactivated — redirected to `{FRONTEND_URL}/link-inactivo` |
-| 429 | Rate limit exceeded — too many requests from this IP |
+| HTTP | Condition | `Location` header |
+|------|-----------|-------------------|
+| 302 | Short code resolved successfully | The original destination URL |
+| 302 | Short code not found (`URL_NOT_FOUND`) | `{FRONTEND_URL}/link-no-encontrado` |
+| 302 | URL is deactivated (`URL_INACTIVE`) | `{FRONTEND_URL}/link-inactivo` |
+| 429 | Rate limit exceeded | — (JSON error envelope) |
 
 <Note>
-  The `404` and `410` conditions do not return raw JSON to the browser. Because `GET /{code}` is the only endpoint a human opens directly in their browser, Quikko redirects error states to branded frontend pages (`/link-no-encontrado` and `/link-inactivo`) instead of exposing a JSON error envelope. A genuine 5xx server error still returns the standard JSON envelope for diagnostic purposes.
+  Unlike the REST API, `GET /{code}` is the only endpoint a human opens directly in their browser. For that reason, both `URL_NOT_FOUND` and `URL_INACTIVE` error conditions respond with an HTTP **302** redirect to branded frontend error pages instead of returning a raw JSON error envelope. Only genuine 5xx server errors return the standard JSON envelope for diagnostic purposes.
 </Note>
 
 ### Rate limiting

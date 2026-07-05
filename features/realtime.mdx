@@ -1,5 +1,5 @@
 ---
-title: "Real-time Click Streaming via WebSocket"
+title: "Real-time Click Streaming via WebSocket Connection"
 sidebarTitle: "Real-time Updates"
 description: "Quikko streams live click events to the dashboard over WebSocket. Every redirect broadcasts a click_event to all subscribed clients without polling."
 ---
@@ -10,7 +10,7 @@ Quikko's WebSocket hub broadcasts every click event to connected clients in real
 
 When a visitor follows a short link, the redirect handler resolves the destination and immediately fires an async recording call. The analytics service writes the event to InfluxDB **and** calls `PublishClickEvent` on the hub. The hub fans the event out to two rooms: `user:{ownerID}` (the URL owner's personal room) and `url:{shortCode}` (the per-URL room). Any client subscribed to either room receives the message within milliseconds.
 
-```
+```text
 Visitor clicks short link
         │
         ▼
@@ -26,7 +26,7 @@ Visitor clicks short link
 
 ## Connecting
 
-```
+```text
 ws://localhost:8080/ws?token=<accessToken>
 ```
 

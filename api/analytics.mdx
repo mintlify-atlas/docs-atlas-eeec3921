@@ -1,7 +1,7 @@
 ---
-title: "Analytics API: Click Stats and CSV Export"
+title: "Analytics API: Click Stats, Breakdowns & CSV Export"
 sidebarTitle: "Analytics"
-description: "Query aggregated click stats by country, device, and browser for any time range. Export raw analytics data as a CSV file for offline analysis."
+description: "Query aggregated click stats by country, device, and browser for any time range. Export raw analytics data as a UTF-8 CSV file for offline analysis."
 ---
 
 The Analytics API exposes aggregated click statistics stored in InfluxDB. Query totals broken down by country, device type, and browser. Time ranges of `24h`, `7d`, and `30d` are supported — Pro plan is required for the `7d` and `30d` ranges. Export to CSV for spreadsheet analysis in Excel or Google Sheets. All endpoints require authentication.
@@ -110,7 +110,7 @@ The response filename follows the pattern: `stats-<label>-<range>.csv`, where `l
 
 A raw CSV file download with headers:
 
-```
+```http
 Content-Type: text/csv; charset=utf-8
 Content-Disposition: attachment; filename="stats-overview-24h.csv"
 ```

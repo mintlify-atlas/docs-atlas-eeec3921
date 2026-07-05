@@ -1,7 +1,7 @@
 ---
-title: "WebSocket Real-time Protocol Reference"
+title: "Quikko WebSocket Protocol: Real-Time Click Event Reference"
 sidebarTitle: "WebSocket"
-description: "Connect to Quikko's WebSocket endpoint at GET /ws to receive live click events. Full protocol reference including message types, subscribe/unsubscribe, and error handling."
+description: "Stream live click events over Quikko's WebSocket. Covers auth, message types, subscribe/unsubscribe payloads, error codes, and hub delivery semantics."
 ---
 
 Quikko streams live click events over a persistent WebSocket connection at `GET /ws`. Unlike polling, the WebSocket hub pushes each redirect event to all subscribed clients in real time — enabling live-updating dashboards without any extra requests. Every connected client is automatically enrolled in their own user room and begins receiving events immediately upon a successful handshake.
@@ -187,11 +187,17 @@ A read-only hook that selects click events from the store, optionally filtered b
 ```typescript
 // In a React component
 import { useRealtimeClicks } from '@/lib/hooks/useRealtimeClicks';
+import type { ClickEvent } from '@/types';
 
-export function ClickCounter({ shortCode }: { shortCode: string }) {
-  useRealtimeClicks(shortCode); // returns click events filtered to this URL
-  const count = useUrlStore(s => s.clickCount);
-  return <span>{count} clicks</span>;
+export function RecentClicks({ shortCode }: { shortCode: string }) {
+  const events: ClickEvent[] = useRealtimeClicks(shortCode); // filtered to this URL
+  return (
+    <ul>
+      {events.map((e, i) => (
+        <li key={i}>{e.country} — {e.deviceType} — {e.timestamp}</li>
+      ))}
+    </ul>
+  );
 }
 ```
 

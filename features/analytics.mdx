@@ -1,5 +1,5 @@
 ---
-title: "Analytics: Real-time Click Tracking and Metrics"
+title: "Analytics: Click Tracking, Time Ranges, and CSV Export"
 sidebarTitle: "Analytics"
 description: "Quikko tracks every click with country, device type, and browser data stored in InfluxDB. Query aggregated stats for any time range and export to CSV."
 ---
@@ -103,13 +103,13 @@ The same endpoint serves both all-URL and single-URL analytics depending on whet
 
 **All-URL overview** — omit `shortCode` to aggregate across every URL you own:
 
-```bash
+```http
 GET /api/v1/analytics/stats?range=7d
 ```
 
 **Single-URL stats** — include `shortCode` to scope results to one link. The server validates ownership and returns `403 FORBIDDEN` if the code belongs to another user or does not exist:
 
-```bash
+```http
 GET /api/v1/analytics/stats?shortCode=aB3kR7m&range=7d
 ```
 
@@ -135,7 +135,7 @@ curl "https://quikko.io/api/v1/analytics/stats?range=24h" \
 
 The `Content-Disposition` header is set to `attachment` with a descriptive filename:
 
-```
+```http
 Content-Disposition: attachment; filename="stats-aB3kR7m-7d.csv"
 ```
 

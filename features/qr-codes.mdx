@@ -1,7 +1,7 @@
 ---
-title: "Automatic QR Code Generation for Short URLs"
+title: "QR Code Generation for Quikko Short URLs on Demand"
 sidebarTitle: "QR Codes"
-description: "Every Quikko short URL includes an on-demand QR code as a base64-encoded PNG data URI. No separate request needed — it ships with the URL creation response."
+description: "Every Quikko short URL ships with an on-demand QR code as a PNG data URI. No separate API call needed — the QR is included in the creation response."
 ---
 
 Every time you create or retrieve a short URL, Quikko automatically generates a QR code that encodes the full short link. The QR is returned as a **256×256 PNG image encoded as a base64 data URI** — ready to drop directly into an `<img>` tag or a download link. There is no separate endpoint to call and no polling required; the QR code ships alongside the URL metadata in a single response.

@@ -1,7 +1,7 @@
 ---
-title: "Free and Pro Plans: Features and Limits"
+title: "Quikko Free vs Pro Plans: Features, Limits, and Quotas"
 sidebarTitle: "Plans Overview"
-description: "Quikko offers Free and Pro plans. Free supports up to 5 active URLs with 24-hour analytics. Pro removes all limits and unlocks 7-day and 30-day analytics history."
+description: "Quikko Free and Pro plans: active URL quotas, analytics time ranges, plan enforcement, account summary endpoint, and how to switch plans."
 ---
 
 Quikko provides two plans — Free and Pro — enforced server-side on every API call. The active URL limit and analytics time range are the primary differentiators between them. Plan enforcement happens entirely in the Go backend; no client-side trust is involved. The plan a user holds is read from the database on each operation, so it is never embedded in a JWT and cannot be spoofed by a tampered token.
@@ -12,7 +12,7 @@ Quikko provides two plans — Free and Pro — enforced server-side on every API
 |---------|------|-----|
 | Active URLs | Up to 5 | Unlimited |
 | Analytics range | 24 hours | 24h, 7d, 30d |
-| CSV export | ✓ | ✓ |
+| CSV export | — | ✓ |
 | QR codes | ✓ | ✓ |
 | Real-time dashboard | ✓ | ✓ |
 | Custom aliases | ✓ | ✓ |

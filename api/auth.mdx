@@ -1,7 +1,7 @@
 ---
-title: "Auth API: Register, Login, and Account Management"
+title: "Auth API: Registration, Login & Account Management"
 sidebarTitle: "Auth"
-description: "REST endpoints for user registration, login, token refresh, account info, plan changes, password updates, and account deletion."
+description: "REST endpoints for user registration, login, token refresh, profile retrieval, plan upgrades, password changes, and full account deletion."
 ---
 
 The Auth API manages user identity in Quikko. It issues JWT access and refresh tokens on registration and login, and provides endpoints to query account state, update passwords, change plans, and delete accounts. All responses use the standard JSON envelope — `{ "success": true, "data": {...}, "error": null }` — except empty-success operations where `data` is `null`.
@@ -132,7 +132,7 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 
 <span className="method-badge method-post">POST</span> `/api/v1/auth/refresh`
 
-Exchanges a valid refresh token for a **new access token**. The response contains only `accessToken` — no `refreshToken` and no `user` object. No rate limit is applied to this endpoint.
+Exchanges a valid refresh token for a **new access token**. Only `accessToken` is meaningful in the response — `refreshToken` is omitted (empty string with `omitempty`) and `user` is serialized with empty fields. The refresh token itself is not rotated. No rate limit is applied to this endpoint.
 
 ### Request body
 
@@ -145,6 +145,10 @@ Exchanges a valid refresh token for a **new access token**. The response contain
 <ResponseField name="accessToken" type="string">
   A new short-lived JWT. The refresh token itself is not rotated.
 </ResponseField>
+
+<Note>
+  The `refreshToken` field is omitted from the response (Go `omitempty` drops empty strings). The `user` object is serialized with empty fields — clients should ignore it on this endpoint.
+</Note>
 
 ### Error codes
 

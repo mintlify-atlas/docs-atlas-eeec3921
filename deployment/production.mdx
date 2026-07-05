@@ -1,5 +1,5 @@
 ---
-title: "Deploy Quikko to Production"
+title: "Deploy the Quikko Backend to Production With Docker"
 sidebarTitle: "Production"
 description: "Deploy the Quikko Go backend with Docker and host the Next.js frontend on Vercel or Railway. Configure environment variables for production databases."
 ---
@@ -45,7 +45,7 @@ docker build -t quikko-server .
 
 ## Running the container
 
-Pass all required environment variables with `-e` flags or via an `--env-file`. At minimum you must supply `MONGO_URI`, `INFLUX_TOKEN`, and `JWT_SECRET` — the server will exit immediately without them.
+Pass all required environment variables with `-e` flags or via an `--env-file`. At minimum you must supply `MONGO_URI` and `JWT_SECRET` — the server will exit immediately without them. `INFLUX_TOKEN` is not enforced at startup but is required for analytics to function; always provide it in production.
 
 ```bash
 docker run -p 8080:8080 \

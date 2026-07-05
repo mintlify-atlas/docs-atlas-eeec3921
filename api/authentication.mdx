@@ -1,7 +1,7 @@
 ---
-title: "Authenticate with the Quikko API Using JWT"
+title: "JWT Authentication in the Quikko API — Tokens and Flow"
 sidebarTitle: "Authentication"
-description: "Quikko uses JWT Bearer tokens for API authentication. Obtain an access token via register or login, then pass it in the Authorization header on every request."
+description: "Quikko uses JWT Bearer tokens for authentication. Obtain an access token via register or login, then pass it in the Authorization header on every request."
 ---
 
 Quikko authenticates API requests with short-lived JWT access tokens and long-lived refresh tokens. Access tokens expire after **15 minutes** by default; refresh tokens are valid for **7 days** by default. Obtain a token pair from `POST /api/v1/auth/register` or `POST /api/v1/auth/login`, then include the access token in the `Authorization` header on every protected request.
@@ -43,7 +43,7 @@ curl -X POST http://localhost:8080/api/v1/auth/register \
 }
 ```
 
-To sign in with an existing account, call `POST /api/v1/auth/login` with the same body shape. The response is identical in structure. Both `register` and `login` are rate-limited per IP to protect against brute-force attacks, with independent counters configurable via `AUTH_RATE_LIMIT_PER_MIN` and `LOGIN_RATE_LIMIT_PER_MIN`.
+To sign in with an existing account, call `POST /api/v1/auth/login` with the same body shape. The response is identical in structure. Both `register` and `login` are rate-limited per IP to protect against brute-force attacks, with independent counters configurable via `AUTH_RATE_LIMIT_PER_MIN` and `RATE_LIMIT_LOGIN_PER_MIN`.
 
 ## Refreshing the Access Token
 
