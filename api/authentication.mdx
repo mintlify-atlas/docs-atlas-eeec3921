@@ -1,0 +1,138 @@
+---
+title: "Authenticate with the Quikko API Using JWT"
+sidebarTitle: "Authentication"
+description: "Quikko uses JWT Bearer tokens for API authentication. Obtain an access token via register or login, then pass it in the Authorization header on every request."
+---
+
+Quikko authenticates API requests with short-lived JWT access tokens and long-lived refresh tokens. Access tokens expire after **15 minutes** by default; refresh tokens are valid for **7 days** by default. Obtain a token pair from `POST /api/v1/auth/register` or `POST /api/v1/auth/login`, then include the access token in the `Authorization` header on every protected request.
+
+## Passing the Token
+
+All protected endpoints require the access token as a Bearer credential in the `Authorization` header:
+
+```bash
+curl https://api.example.com/api/v1/urls \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1..."
+```
+
+The middleware checks that the header is present, starts with `Bearer `, and contains a valid HS256-signed JWT. Any deviation results in a `401 AUTH_TOKEN_INVALID` response.
+
+## Registering and Getting a Token Pair
+
+New users register with an email and a password (minimum 8 characters). The server creates the account with the `free` plan and immediately returns a token pair alongside the user object — no separate login step is needed.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "you@example.com", "password": "yourpassword"}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "accessToken": "eyJhbGci...",
+    "refreshToken": "eyJhbGci...",
+    "user": {
+      "id": "64a1b2c3d4e5f6a7b8c9d0e1",
+      "email": "you@example.com",
+      "plan": "free"
+    }
+  },
+  "error": null
+}
+```
+
+To sign in with an existing account, call `POST /api/v1/auth/login` with the same body shape. The response is identical in structure. Both `register` and `login` are rate-limited per IP to protect against brute-force attacks, with independent counters configurable via `AUTH_RATE_LIMIT_PER_MIN` and `LOGIN_RATE_LIMIT_PER_MIN`.
+
+## Refreshing the Access Token
+
+When the access token expires, exchange the refresh token for a new access token without requiring the user to log in again:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "eyJhbGci..."}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "accessToken": "eyJhbGci..."
+  },
+  "error": null
+}
+```
+
+<Note>
+  The refresh response contains **only** `accessToken`. There is no `refreshToken` or `user` object in the refresh response. Store the original refresh token and reuse it until it itself expires.
+</Note>
+
+The server validates that the submitted token is a `refresh`-type JWT (not an access token), and confirms the user still exists in the database before issuing a new access token.
+
+## Token Lifetimes
+
+Both TTLs are configurable through environment variables:
+
+| Environment Variable | Default | Description |
+|----------------------|---------|-------------|
+| `JWT_ACCESS_TOKEN_TTL` | `15m` | Lifetime of the access token |
+| `JWT_REFRESH_TOKEN_TTL` | `7d` | Lifetime of the refresh token |
+
+<Tip>
+  In development you can set `JWT_ACCESS_TOKEN_TTL=24h` to avoid frequent token refreshes while building features.
+</Tip>
+
+## What the JWT Contains
+
+All tokens are signed with **HMAC-SHA256** using the `JWT_SECRET` environment variable. The JWT payload carries:
+
+| Claim | Description |
+|-------|-------------|
+| `userID` | MongoDB ObjectID of the authenticated user |
+| `type` | `"access"` or `"refresh"` |
+| `iat` | Issued-at timestamp (standard) |
+| `exp` | Expiry timestamp (standard) |
+
+The user's **plan** (`free`/`pro`) is **not** embedded in the JWT. It is looked up from MongoDB on each request that enforces a plan restriction. This ensures plan changes take effect immediately without requiring users to re-authenticate.
+
+## 401 Error Responses
+
+Protected endpoints return `401` in two distinct situations:
+
+| Error Code | Cause |
+|-----------|-------|
+| `AUTH_TOKEN_INVALID` | `Authorization` header is missing, malformed, or contains an invalid signature |
+| `AUTH_TOKEN_EXPIRED` | The token has a valid signature but its `exp` claim has passed |
+
+Distinguish the two codes to implement silent token refresh correctly: only `AUTH_TOKEN_EXPIRED` should trigger a refresh attempt.
+
+## Silent Refresh Pattern (Frontend)
+
+The Next.js frontend uses a silent refresh pattern so users are never interrupted by token expiry:
+
+1. A protected API call returns `401 AUTH_TOKEN_EXPIRED`.
+2. The client calls `POST /api/v1/auth/refresh` with the stored refresh token.
+3. On success, the new access token is saved and the original request is retried transparently.
+4. If the refresh call also fails (e.g. the refresh token has itself expired), the user is redirected to the login page.
+
+Access tokens are kept in memory in the Zustand store — never in `localStorage` or `sessionStorage`.
+
+<Note>
+  Never store JWTs in `localStorage` in production. Browser storage is accessible to any JavaScript running on the page, making tokens vulnerable to XSS attacks. Keep access tokens in memory and refresh tokens in a secure, `HttpOnly` cookie or in-memory store.
+</Note>
+
+## WebSocket Authentication
+
+Browsers cannot set custom headers during a WebSocket handshake, so the access token is passed as a query parameter instead:
+
+```
+ws://localhost:8080/ws?token=<accessToken>
+```
+
+The server validates the token during the HTTP upgrade request. An invalid or missing token rejects the upgrade with a `401` response before the WebSocket connection is established.
+
+<Warning>
+  Query-parameter tokens are visible in server access logs and browser history. Rotate access tokens regularly and use short TTLs in production environments.
+</Warning>

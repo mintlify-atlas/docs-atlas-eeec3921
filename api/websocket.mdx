@@ -1,0 +1,202 @@
+---
+title: "WebSocket Real-time Protocol Reference"
+sidebarTitle: "WebSocket"
+description: "Connect to Quikko's WebSocket endpoint at GET /ws to receive live click events. Full protocol reference including message types, subscribe/unsubscribe, and error handling."
+---
+
+Quikko streams live click events over a persistent WebSocket connection at `GET /ws`. Unlike polling, the WebSocket hub pushes each redirect event to all subscribed clients in real time — enabling live-updating dashboards without any extra requests. Every connected client is automatically enrolled in their own user room and begins receiving events immediately upon a successful handshake.
+
+## Connecting
+
+The WebSocket endpoint lives at the root of the server, not under `/api/v1`.
+
+**Endpoint:** `ws://localhost:8080/ws?token=<accessToken>`
+
+Authentication uses the JWT access token passed as a `token` query parameter. This is intentional: the browser `WebSocket` API does not allow custom headers during the initial HTTP upgrade handshake, so the token cannot be sent via `Authorization`.
+
+Token validation happens **before** the HTTP upgrade. If the token is missing, invalid, or expired, the server responds with a standard `HTTP 401` JSON error body and the WebSocket upgrade never occurs. The two possible handshake error codes are:
+
+| Code | Meaning |
+|---|---|
+| `AUTH_TOKEN_INVALID` | Token is absent or cannot be parsed/verified |
+| `AUTH_TOKEN_EXPIRED` | Token is well-formed but has passed its expiry time |
+
+Once the upgrade succeeds, the connection is live and the client is ready to receive events.
+
+```javascript
+const ws = new WebSocket(`ws://localhost:8080/ws?token=${accessToken}`);
+
+ws.onopen = () => console.log('Connected to Quikko realtime');
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'click_event') {
+    console.log('New click:', msg.payload);
+  }
+};
+
+ws.onerror = (err) => console.error('WebSocket error', err);
+ws.onclose = () => console.log('Disconnected');
+```
+
+<Note>
+  The WebSocket endpoint is registered at the server root as `GET /ws` — it does **not** share the `/api/v1` prefix used by the REST API. Connect to `ws://localhost:8080/ws?token=...`, not `ws://localhost:8080/api/v1/ws`.
+</Note>
+
+## Auto-subscription
+
+On a successful connection, the server automatically subscribes the client to their personal user room, identified as `user:{userID}` (where `userID` is derived from the validated JWT claims). This means the client immediately receives click events for **all** of their short URLs without sending any additional messages. The overview dashboard relies entirely on this auto-subscription — no explicit `subscribe` call is needed to see aggregated activity.
+
+To filter events down to a single URL (e.g., on a URL detail page), the client can send an explicit `subscribe` message as described below.
+
+## Message Format
+
+All messages exchanged between client and server use a common JSON envelope:
+
+```json
+{ "type": "<type>", "payload": { ... } }
+```
+
+The `type` field is the discriminator for all protocol messages. Valid values are:
+
+| Type | Direction | Description |
+|---|---|---|
+| `subscribe` | Client → Server | Subscribe to a specific URL's event channel |
+| `unsubscribe` | Client → Server | Unsubscribe from a specific URL's event channel |
+| `click_event` | Server → Client | A redirect event occurred on a subscribed URL |
+| `error` | Server → Client | A non-fatal protocol error occurred |
+
+---
+
+## Client → Server Messages
+
+### `subscribe`
+
+Subscribes the client to the channel for a specific short URL (`url:{shortCode}`). This is useful on a URL detail page where you want to receive events for one URL only, in addition to events flowing through the auto-subscribed user room.
+
+Before joining the room, the server validates that the requesting client is the **owner** of the URL. If the URL does not exist or belongs to another user, the server responds with an `error` message — the connection remains open and the subscription is not created.
+
+```json
+{ "type": "subscribe", "payload": { "shortCode": "xYz12A" } }
+```
+
+### `unsubscribe`
+
+Removes the client from the event channel for a specific short URL. After this, the client will no longer receive `click_event` messages routed via `url:{shortCode}`, though events for that URL may still arrive through the user room.
+
+```json
+{ "type": "unsubscribe", "payload": { "shortCode": "xYz12A" } }
+```
+
+---
+
+## Server → Client Messages
+
+### `click_event`
+
+Emitted by the server for every redirect of a URL the client is subscribed to — either through their user room or through an explicit URL subscription. The hub broadcasts the same event to both the `user:{ownerID}` room and the `url:{shortCode}` room simultaneously.
+
+```json
+{
+  "type": "click_event",
+  "payload": {
+    "shortCode": "xYz12A",
+    "country": "US",
+    "deviceType": "desktop",
+    "browser": "Chrome",
+    "timestamp": "2024-01-15T12:34:56Z"
+  }
+}
+```
+
+<ResponseField name="shortCode" type="string" required>
+  The short code of the URL that was clicked (e.g. `"xYz12A"`).
+</ResponseField>
+
+<ResponseField name="country" type="string">
+  ISO 3166-1 alpha-2 country code resolved via GeoIP lookup at redirect time (e.g. `"US"`, `"GB"`, `"PE"`). May be an empty string if the lookup could not resolve a country for the client's IP address.
+</ResponseField>
+
+<ResponseField name="deviceType" type="string">
+  The category of device that performed the redirect. One of `"desktop"`, `"mobile"`, or `"tablet"`.
+</ResponseField>
+
+<ResponseField name="browser" type="string">
+  The browser name parsed from the redirect request's User-Agent header (e.g. `"Chrome"`, `"Firefox"`, `"Safari"`).
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 UTC timestamp indicating when the redirect occurred (e.g. `"2024-01-15T12:34:56Z"`).
+</ResponseField>
+
+### `error`
+
+Sent by the server to communicate a non-fatal protocol error. The connection remains open — the client does not need to reconnect. The most common cause is sending a `subscribe` request for a URL that does not exist or is owned by a different user.
+
+```json
+{ "type": "error", "payload": { "code": "FORBIDDEN", "message": "URL not found or not yours." } }
+```
+
+<ResponseField name="code" type="string" required>
+  A machine-readable error code. Common values:
+  - `FORBIDDEN` — attempted to subscribe to a URL you do not own
+  - `VALIDATION_ERROR` — malformed message JSON or missing required field (e.g. no `shortCode`)
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  A human-readable description of the error, suitable for display in developer tooling or error logs.
+</ResponseField>
+
+---
+
+## Hub Implementation Notes
+
+Understanding the hub's concurrency model helps explain the delivery guarantees clients should expect.
+
+**Non-blocking broadcast:** When the hub broadcasts a `click_event` to a room, it iterates all subscribed clients and attempts a non-blocking send to each client's internal send channel (buffer size: 16 messages). If a specific client's buffer is full, that message is silently dropped for that client only — it is logged server-side but does not affect delivery to any other client in the room and does not block the broadcast itself.
+
+**Safe concurrent access:** The client's `send` channel is never closed from outside the client's own goroutines. Instead, a `done` channel (closed once via `sync.Once`) signals shutdown to the write pump. This ensures that a concurrent `Broadcast` call can never write to a closed channel, which would cause a panic.
+
+**Room lifecycle:** Empty rooms are removed from the hub's room map as soon as the last client unregisters, keeping memory use proportional to active connections rather than historical activity.
+
+**Two rooms per event:** Every `click_event` is broadcast to two rooms — `user:{ownerID}` and `url:{shortCode}` — so clients subscribed to either will receive it. This dual-broadcast is handled atomically by `PublishClickEvent` in the hub.
+
+**Ping / pong keepalive:** The server sends a WebSocket ping every ~54 seconds (90% of the 60-second pong wait timeout). If the client does not respond with a pong within 60 seconds, the server closes the connection. Standard browser WebSocket implementations handle pong responses automatically.
+
+---
+
+## Frontend Integration (Next.js)
+
+The Quikko Next.js client manages a **single shared WebSocket connection** for the entire application lifetime using a Zustand store (`useRealtimeStore`) and a `useRealtimeClicks` convenience hook. No component opens its own connection — they all read from the shared store.
+
+### `useRealtimeStore`
+
+The store handles the full connection lifecycle, including:
+
+- Opening the connection on login and closing it on logout (by subscribing to the auth store — no circular imports)
+- Automatic exponential backoff reconnection on unexpected disconnect (starting at 1 s, doubling up to 30 s)
+- Keeping a rolling buffer of the 50 most recent `click_event` payloads
+- Forwarding `error` messages to the notifications store as toast alerts
+
+The store exposes `subscribeToUrl(shortCode)` and `unsubscribeFromUrl(shortCode)` helpers that send the appropriate protocol messages over the open socket.
+
+### `useRealtimeClicks`
+
+A read-only hook that selects click events from the store, optionally filtered by `shortCode`. Components use this to react to incoming events without coupling to the socket directly.
+
+```typescript
+// In a React component
+import { useRealtimeClicks } from '@/lib/hooks/useRealtimeClicks';
+
+export function ClickCounter({ shortCode }: { shortCode: string }) {
+  useRealtimeClicks(shortCode); // returns click events filtered to this URL
+  const count = useUrlStore(s => s.clickCount);
+  return <span>{count} clicks</span>;
+}
+```
+
+When called without a `shortCode`, `useRealtimeClicks()` returns all recent events across every URL — useful for the overview dashboard. When called with a `shortCode`, it returns only events for that URL using a memoized filter.
+
+<Tip>
+  For production applications, implement exponential backoff on `ws.onclose` to avoid hammering the server after network interruptions. The Quikko store uses a doubling strategy: 1 s → 2 s → 4 s → 8 s, capped at 30 s. Reset the attempt counter to zero on a successful `ws.onopen`.
+</Tip>

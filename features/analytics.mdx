@@ -1,0 +1,148 @@
+---
+title: "Analytics: Real-time Click Tracking and Metrics"
+sidebarTitle: "Analytics"
+description: "Quikko tracks every click with country, device type, and browser data stored in InfluxDB. Query aggregated stats for any time range and export to CSV."
+---
+
+Quikko records every redirect as a click event in InfluxDB. Each event captures the timestamp, short code, owning user ID, the visitor's country (resolved via GeoIP), device type, and browser. Aggregated statistics — total clicks, breakdowns by country, device, and browser, plus a time-series chart — are available through a single API endpoint with three selectable time ranges. Free plan accounts are limited to the last 24 hours; Pro accounts can query up to 30 days of history.
+
+## What Gets Tracked Per Click
+
+Every time a visitor follows a short link, the redirect handler captures the request and fires an async recording call. The following fields are written to InfluxDB as a `clicks` measurement:
+
+<CardGroup cols={2}>
+  <Card title="Timestamp" icon="clock">
+    The exact UTC time of the redirect, used as the InfluxDB series timestamp.
+  </Card>
+  <Card title="Short code" icon="link">
+    The `shortCode` identifier of the URL that was clicked — the primary tag for per-URL filtering.
+  </Card>
+  <Card title="User ID" icon="user">
+    The `ownerID` of the URL, enabling per-account aggregation without scanning all measurements.
+  </Card>
+  <Card title="Country" icon="earth-americas">
+    ISO 3166-1 alpha-2 country code resolved from the visitor's IP via **ipapi.co**, cached in Redis for 48 hours.
+  </Card>
+  <Card title="Device type" icon="mobile">
+    Parsed from the `User-Agent` header: `desktop`, `mobile`, or `tablet`.
+  </Card>
+  <Card title="Browser" icon="globe">
+    Browser family parsed from the `User-Agent`: Chrome, Firefox, Safari, Edge, and others.
+  </Card>
+</CardGroup>
+
+### GeoIP Resolution
+
+Country lookup is performed by calling the external **ipapi.co** service. To avoid hitting the service on every redirect, results are cached in Redis with a **48-hour TTL**. If the cache already holds a result for a given IP, no outbound HTTP request is made. If Redis is unavailable, the service degrades gracefully by querying ipapi.co directly.
+
+## Available Time Ranges
+
+Pass the `range` query parameter to select the analysis window. An empty or omitted `range` defaults to `24h`.
+
+| Value | Window | Time-series bucket size |
+|---|---|---|
+| `24h` | Last 24 hours | 1-hour buckets |
+| `7d` | Last 7 days | 1-day buckets |
+| `30d` | Last 30 days | 1-day buckets |
+
+<Note>
+  The `7d` and `30d` ranges are available on the **Pro plan only**. Free plan accounts that request these ranges receive a `403 PLAN_RANGE_NOT_ALLOWED` response. The plan is checked on every request — upgrading takes effect immediately without requiring a re-login.
+</Note>
+
+## Stats Response Shape
+
+The `GET /api/v1/analytics/stats` endpoint returns a `StatsResponse` envelope whose `stats` field matches the `ClickStats` schema:
+
+```json
+{
+  "success": true,
+  "data": {
+    "range": "7d",
+    "stats": {
+      "totalClicks": 1482,
+      "clicksByCountry": {
+        "US": 620,
+        "DE": 310,
+        "BR": 198,
+        "GB": 154,
+        "other": 200
+      },
+      "clicksByDevice": {
+        "mobile": 891,
+        "desktop": 541,
+        "tablet": 50
+      },
+      "clicksByBrowser": {
+        "Chrome": 804,
+        "Safari": 421,
+        "Firefox": 180,
+        "Edge": 77
+      },
+      "clicksOverTime": [
+        { "timestamp": "2024-01-09T00:00:00Z", "count": 195 },
+        { "timestamp": "2024-01-10T00:00:00Z", "count": 231 },
+        { "timestamp": "2024-01-11T00:00:00Z", "count": 178 }
+      ]
+    }
+  },
+  "error": null
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `totalClicks` | `int64` | Total click count across the selected time window |
+| `clicksByCountry` | `map[string]int64` | Per-country breakdown keyed by ISO 2-letter code |
+| `clicksByDevice` | `map[string]int64` | Per-device-type breakdown |
+| `clicksByBrowser` | `map[string]int64` | Per-browser breakdown |
+| `clicksOverTime` | `TimeBucket[]` | Ordered time-series array of `{timestamp, count}` buckets |
+
+## Overview vs. Per-URL Stats
+
+The same endpoint serves both all-URL and single-URL analytics depending on whether `shortCode` is present.
+
+**All-URL overview** — omit `shortCode` to aggregate across every URL you own:
+
+```bash
+GET /api/v1/analytics/stats?range=7d
+```
+
+**Single-URL stats** — include `shortCode` to scope results to one link. The server validates ownership and returns `403 FORBIDDEN` if the code belongs to another user or does not exist:
+
+```bash
+GET /api/v1/analytics/stats?shortCode=aB3kR7m&range=7d
+```
+
+## Fetching Stats — curl Examples
+
+### 7-day stats for a specific URL
+
+```bash
+curl "https://quikko.io/api/v1/analytics/stats?shortCode=aB3kR7m&range=7d" \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+### All-URL overview for the last 24 hours
+
+```bash
+curl "https://quikko.io/api/v1/analytics/stats?range=24h" \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+## CSV Export
+
+`GET /api/v1/analytics/stats/export` accepts the same `shortCode` and `range` parameters as the stats endpoint and applies identical ownership and plan-range validation. On success it returns a **UTF-8 BOM CSV file** (BOM prefix + CRLF line endings), which makes it directly openable in Microsoft Excel without an import wizard.
+
+The `Content-Disposition` header is set to `attachment` with a descriptive filename:
+
+```
+Content-Disposition: attachment; filename="stats-aB3kR7m-7d.csv"
+```
+
+```bash
+curl "https://quikko.io/api/v1/analytics/stats/export?shortCode=aB3kR7m&range=7d" \
+  -H "Authorization: Bearer <accessToken>" \
+  -o stats.csv
+```
+
+Error responses from the export endpoint — invalid range, forbidden URL, plan restriction — still use the standard JSON envelope, not a CSV body.

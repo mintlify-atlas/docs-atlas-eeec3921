@@ -1,0 +1,143 @@
+---
+title: "Analytics API: Click Stats and CSV Export"
+sidebarTitle: "Analytics"
+description: "Query aggregated click stats by country, device, and browser for any time range. Export raw analytics data as a CSV file for offline analysis."
+---
+
+The Analytics API exposes aggregated click statistics stored in InfluxDB. Query totals broken down by country, device type, and browser. Time ranges of `24h`, `7d`, and `30d` are supported — Pro plan is required for the `7d` and `30d` ranges. Export to CSV for spreadsheet analysis in Excel or Google Sheets. All endpoints require authentication.
+
+<Note>
+  Free plan users are restricted to the `24h` range. Requesting `7d` or `30d` without a Pro plan returns `403 PLAN_RANGE_NOT_ALLOWED`. Upgrade your plan via [`PATCH /api/v1/auth/me/plan`](/api/auth#patch-apiv1authmeplan) to unlock extended ranges.
+</Note>
+
+---
+
+## GET /api/v1/analytics/stats
+
+<span className="method-badge method-get">GET</span> `/api/v1/analytics/stats`
+
+Returns aggregated click statistics for the authenticated user. Provide a `shortCode` to query a single URL, or omit it for an overview of **all** your URLs combined.
+
+### Query parameters
+
+<ParamField query="shortCode" type="string">
+  Short code of the URL to query (e.g. `xYz12A`). Omit to get an aggregate overview across all your URLs. Returns `403 FORBIDDEN` if the code exists but belongs to another user.
+</ParamField>
+
+<ParamField query="range" type="string">
+  Time range for the query. One of `24h`, `7d`, or `30d`. Defaults to `24h`. Free plan users may only use `24h`.
+</ParamField>
+
+### Response — `200 OK`
+
+<ResponseField name="range" type="string">
+  The time range used for this response — `"24h"`, `"7d"`, or `"30d"`.
+</ResponseField>
+
+<ResponseField name="stats" type="object">
+  Aggregated click statistics for the requested range.
+
+  <Expandable title="stats (ClickStats) fields">
+    <ResponseField name="stats.totalClicks" type="integer">
+      Total number of clicks recorded in the requested range.
+    </ResponseField>
+    <ResponseField name="stats.clicksByCountry" type="object">
+      Map of ISO country code to click count, e.g. `{"US": 142, "DE": 38, "MX": 17}`. Country is resolved via GeoIP on each redirect.
+    </ResponseField>
+    <ResponseField name="stats.clicksByDevice" type="object">
+      Map of device type to click count, e.g. `{"mobile": 98, "desktop": 79, "tablet": 5}`. Derived from the `User-Agent` header at redirect time.
+    </ResponseField>
+    <ResponseField name="stats.clicksByBrowser" type="object">
+      Map of browser name to click count, e.g. `{"Chrome": 110, "Safari": 55, "Firefox": 17}`. Derived from the `User-Agent` header at redirect time.
+    </ResponseField>
+    <ResponseField name="stats.clicksOverTime" type="array">
+      Array of time-bucketed click counts for charting.
+
+      <Expandable title="clicksOverTime item fields">
+        <ResponseField name="timestamp" type="string">
+          ISO 8601 timestamp for the start of this bucket.
+        </ResponseField>
+        <ResponseField name="count" type="integer">
+          Number of clicks in this time bucket.
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Invalid `range` value or malformed parameters |
+| 401 | `AUTH_TOKEN_INVALID` | Missing or invalid Bearer token |
+| 403 | `FORBIDDEN` | `shortCode` belongs to another user |
+| 403 | `PLAN_RANGE_NOT_ALLOWED` | Free plan user requested `7d` or `30d` range |
+
+```bash
+# Overview stats for all your URLs over the last 24 hours (default)
+curl -s "http://localhost:8080/api/v1/analytics/stats" \
+  -H "Authorization: Bearer <access-token>"
+
+# Stats for a specific URL over the last 7 days (Pro plan required)
+curl -s "http://localhost:8080/api/v1/analytics/stats?shortCode=xYz12A&range=7d" \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## GET /api/v1/analytics/stats/export
+
+<span className="method-badge method-get">GET</span> `/api/v1/analytics/stats/export`
+
+Exports the same statistics as `GET /api/v1/analytics/stats` as a downloadable CSV file. Accepts identical query parameters and enforces the same plan/ownership validations.
+
+The **success response** is a raw CSV file — not the standard JSON envelope. The file is UTF-8 BOM encoded for seamless opening in Microsoft Excel without manual encoding configuration. Error responses (4xx/5xx) still use the standard JSON envelope.
+
+The response filename follows the pattern: `stats-<label>-<range>.csv`, where `label` is the `shortCode` or `"overview"` for all-URL exports.
+
+### Query parameters
+
+<ParamField query="shortCode" type="string">
+  Short code of the URL to export. Omit for an all-URL overview export.
+</ParamField>
+
+<ParamField query="range" type="string">
+  Time range — `24h`, `7d`, or `30d`. Defaults to `24h`. Free plan users may only use `24h`.
+</ParamField>
+
+### Response — `200 OK`
+
+A raw CSV file download with headers:
+
+```
+Content-Type: text/csv; charset=utf-8
+Content-Disposition: attachment; filename="stats-overview-24h.csv"
+```
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Invalid `range` value or malformed parameters |
+| 401 | `AUTH_TOKEN_INVALID` | Missing or invalid Bearer token |
+| 403 | `FORBIDDEN` | `shortCode` belongs to another user |
+| 403 | `PLAN_RANGE_NOT_ALLOWED` | Free plan user requested `7d` or `30d` |
+
+<Tip>
+  Use `-O` with curl to save the file using the server-provided filename from `Content-Disposition`.
+</Tip>
+
+```bash
+# Download a 30-day CSV export for a specific URL (Pro plan required)
+curl -s -O -J \
+  "http://localhost:8080/api/v1/analytics/stats/export?shortCode=xYz12A&range=30d" \
+  -H "Authorization: Bearer <access-token>"
+# Saves as: stats-xYz12A-30d.csv
+
+# Download an overview CSV for the last 24 hours
+curl -s -O -J \
+  "http://localhost:8080/api/v1/analytics/stats/export?range=24h" \
+  -H "Authorization: Bearer <access-token>"
+# Saves as: stats-overview-24h.csv
+```

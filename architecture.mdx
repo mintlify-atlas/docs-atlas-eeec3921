@@ -1,0 +1,172 @@
+---
+title: "Quikko System Architecture and Data Flow"
+sidebarTitle: "Architecture"
+description: "Explore how Quikko's Go backend, Redis cache, MongoDB, InfluxDB, and WebSocket hub connect to deliver low-latency URL redirects and real-time analytics."
+---
+
+Quikko follows **Clean Architecture** principles throughout its Go backend: each domain exposes only interfaces to the outside world, infrastructure adapters are injected at startup, and there are no circular dependencies between packages. The project is organized as a **monorepo** with two independent applications — `quikko/client/` (the Next.js dashboard) and `quikko/server/` (the Go API) — that communicate exclusively over HTTP and WebSocket.
+
+## Monorepo Structure
+
+```text
+quikko/
+├── client/          # Next.js 16 frontend dashboard
+│   ├── app/         # App Router pages and layouts
+│   ├── components/  # Reusable UI components
+│   ├── store/       # Zustand domain stores
+│   ├── lib/         # Centralized API client and utilities
+│   ├── hooks/       # Custom React hooks
+│   └── types/       # Shared TypeScript types
+│
+├── server/          # Go REST API
+│   ├── cmd/api/     # Entry point — wires all dependencies
+│   ├── config/      # Environment-variable configuration
+│   ├── internal/    # Domain packages (auth, shortener, redirect, …)
+│   └── docs/        # OpenAPI spec served at /docs
+│
+└── README.md
+```
+
+## Backend Domains
+
+The server is structured around six clearly scoped domains. Each domain owns its handler, service, and repository layers and exposes a `RegisterRoutes` function that the main entry point calls during startup.
+
+| Domain | Responsibility |
+|--------|----------------|
+| Authentication | User registration, login, JWT token issuance |
+| URL Shortener | Create and manage short URLs |
+| Redirect | Resolve short codes and serve HTTP 302 |
+| Analytics | Record and query click metrics |
+| Realtime | WebSocket hub for live events |
+| Platform | Shared infra: MongoDB, Redis, JWT, InfluxDB |
+
+Every domain follows the same layered pattern:
+
+```text
+HTTP Request
+      │
+      ▼
+  Handler        ← validates input, calls service
+      │
+      ▼
+  Service        ← business logic, orchestrates repos
+      │
+      ▼
+ Repository      ← data access, abstracts infrastructure
+      │
+      ▼
+Infrastructure   ← MongoDB / Redis / InfluxDB drivers
+```
+
+## Redirect Flow
+
+The public redirect endpoint (`GET /:code`) is the most performance-sensitive path in the system. It is optimized around a Redis-first strategy:
+
+1. **Cache hit** — Redis returns the original URL immediately. No MongoDB query is made. An HTTP 302 is returned to the client in the same step.
+2. **Cache miss** — MongoDB is consulted, the URL is written back to Redis for subsequent requests, and the HTTP 302 is returned.
+3. **Async click recording** — After the response is sent, a goroutine records the click event to InfluxDB (timestamp, URL, user, country, browser, OS, device).
+4. **Async WebSocket broadcast** — The same goroutine notifies the WebSocket Hub, which fans out the event to every authenticated dashboard client.
+
+```text
+Client
+  │
+  ▼
+GET /:code
+  │
+  ├─── Redis (cache hit) ──────────────────► HTTP 302  ─► InfluxDB (async)
+  │                                                     └► WebSocket Hub (async)
+  │
+  └─── Redis (miss) ──► MongoDB ──► Redis (write-back) ► HTTP 302  ─► InfluxDB (async)
+                                                                    └► WebSocket Hub (async)
+```
+
+Because analytics are written asynchronously, the redirect latency is not affected by InfluxDB write throughput. Even under high load, a Redis cache hit means the critical path touches no database at all.
+
+## Analytics Flow
+
+Each click event flows through the Analytics service before reaching the time-series store and the live dashboard:
+
+```text
+Click
+  │
+  ▼
+Redirect Handler
+  │
+  ▼
+Analytics Service
+  ├────────► InfluxDB          (click stored with full metadata)
+  │
+  └────────► WebSocket Hub
+                  │
+                  ▼
+         Connected Dashboards  (charts and tables update in real time)
+```
+
+Every event stored in InfluxDB includes:
+
+- Date and time
+- Short URL visited
+- Owner user ID
+- Country of origin (resolved via GeoIP)
+- Browser, operating system, and device type
+
+## Infrastructure
+
+All infrastructure services are managed by Docker Compose for local development and can be replaced with managed cloud equivalents in production.
+
+| Service | Port | Role |
+|---------|------|------|
+| MongoDB | 27017 | Users, URLs, metadata |
+| Redis | 6379 | Redirect cache, rate limiting |
+| InfluxDB | 8086 | Time-series click events |
+| Go API | 8080 | REST API + WebSocket |
+| Next.js | 3000 | Frontend dashboard |
+
+## Frontend Architecture
+
+The Next.js frontend is built on the **App Router** and follows a strict separation between UI and data access. Components never call the backend directly — all communication flows through a centralized API client and then into domain-specific Zustand stores.
+
+```text
+Page / Component
+      │
+      ▼
+  Zustand Store    ← single source of truth per domain
+      │
+      ▼
+  API Client       ← adds Authorization header, handles silent JWT refresh
+      │
+      ▼
+  Go Backend
+```
+
+**Zustand stores by domain:**
+
+| Store | Responsibility |
+|-------|----------------|
+| `auth` | Authentication state and session management |
+| `urls` | Short URL list, creation, editing, and deletion |
+| `analytics` | Per-URL and global click statistics |
+| `realtime` | WebSocket connection and incoming event queue |
+| `notifications` | In-app notification messages |
+| `ui` | Interface preferences (dark mode, sidebar state) |
+
+The API client implements **silent JWT refresh**: when a request returns `401 Unauthorized`, the client automatically exchanges the stored refresh token for a new access token and retries the original request — completely transparent to the user.
+
+## Security
+
+Quikko applies multiple layers of defense across both the backend and the frontend:
+
+- **JWT access + refresh tokens** — Short-lived access tokens (15 minutes by default) paired with longer-lived refresh tokens (7 days). The refresh flow is handled silently by the frontend API client.
+- **Password hashing** — Passwords are never stored in plain text; bcrypt hashing is applied before persisting to MongoDB.
+- **Redis-backed rate limiting** — Separate per-IP rate limiters protect the registration endpoint (`AUTH_RATE_LIMIT_PER_MIN`, default 5), the login endpoint (`RATE_LIMIT_LOGIN_PER_MIN`, default 5), URL creation (`RATE_LIMIT_CREATE_PER_MIN`, default 20), and redirects (`RATE_LIMIT_REDIRECT_PER_SEC`, default 100).
+- **Security headers** — Every non-docs response includes `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, and `Referrer-Policy: strict-origin-when-cross-origin`.
+- **CORS allowlist** — `ALLOWED_ORIGINS` is an explicit comma-separated list; wildcard `*` is intentionally not supported to stay compatible with future cookie-based auth.
+- **Body size limit** — All request bodies are capped at 1 MB; oversized payloads are rejected with HTTP 413 before reaching any handler.
+- **Strict URL validation** — All submitted URLs are validated against a strict set of rules before being stored or redirected.
+
+<Warning>
+  Before deploying to production, replace the default `JWT_SECRET` in your
+  `.env` file with a long, randomly generated secret. The example value shipped
+  in `.env.example` is intentionally insecure and must not be used outside of
+  local development.
+</Warning>

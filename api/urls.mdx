@@ -1,0 +1,299 @@
+---
+title: "URLs API: Create, List, and Manage Short Links"
+sidebarTitle: "URLs"
+description: "REST endpoints to create short URLs with optional custom aliases, list URLs with filtering and pagination, toggle active state, and delete links."
+---
+
+The URLs API is the core of Quikko. Use it to create short links (with auto-generated or custom short codes), list and filter your URLs with pagination, activate or deactivate links, and delete them. All endpoints require authentication via `Authorization: Bearer <accessToken>`.
+
+<Note>
+  The Free plan enforces a limit on the number of **active** URLs. Creating a URL or re-activating a deactivated one both count against this quota. Deactivating a URL frees up a slot immediately.
+</Note>
+
+---
+
+## POST /api/v1/urls
+
+<span className="method-badge method-post">POST</span> `/api/v1/urls`
+
+Creates a new short URL. If no `customAlias` is supplied, Quikko auto-generates a random short code. Rate limited per authenticated user (`RATE_LIMIT_CREATE_PER_MIN`).
+
+**URL validation** is applied before any database write. The `originalUrl` must:
+- Use the `http` or `https` scheme
+- Not resolve to a private or loopback IP (e.g. `192.168.x.x`, `127.0.0.1`, `10.x.x.x`)
+- Not be a self-referential URL pointing back to the Quikko service itself
+
+### Request body
+
+<ParamField body="originalUrl" type="string" required>
+  The destination URL. Must be a valid `http` or `https` URI.
+</ParamField>
+
+<ParamField body="customAlias" type="string">
+  Optional custom short code. Alphanumeric, 3–30 characters. If omitted, a random code is generated. Returns `409 ALIAS_TAKEN` if already in use.
+</ParamField>
+
+### Response — `201 Created`
+
+Returns a full `URLResponse` object. See the [URLResponse fields](#urlresponse-fields) section below.
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing `originalUrl` or malformed body |
+| 400 | `INVALID_URL` | URL fails scheme/private-IP/self-referential check |
+| 401 | `AUTH_TOKEN_INVALID` | Missing or invalid Bearer token |
+| 403 | `PLAN_LIMIT_EXCEEDED` | Free plan active-URL quota reached |
+| 409 | `ALIAS_TAKEN` | Requested `customAlias` is already in use |
+| 429 | `RATE_LIMIT_EXCEEDED` | Too many creation requests from this user |
+
+```bash
+# Create a URL with auto-generated short code
+curl -s -X POST http://localhost:8080/api/v1/urls \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"originalUrl": "https://example.com/very/long/path?ref=campaign"}'
+
+# Create a URL with a custom alias
+curl -s -X POST http://localhost:8080/api/v1/urls \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"originalUrl": "https://example.com/product-launch", "customAlias": "launch-2025"}'
+```
+
+---
+
+## GET /api/v1/urls
+
+<span className="method-badge method-get">GET</span> `/api/v1/urls`
+
+Lists the authenticated user's short URLs with pagination, optional text search, and status filtering. Filters are resolved in the database — `meta.total` and `meta.totalPages` reflect the **already-filtered** count.
+
+### Query parameters
+
+<ParamField query="page" type="integer">
+  Page number. Defaults to `1`.
+</ParamField>
+
+<ParamField query="limit" type="integer">
+  Results per page. Defaults to `20`, maximum `100` (clamped automatically).
+</ParamField>
+
+<ParamField query="search" type="string">
+  Case-insensitive partial match against `shortCode` or `originalUrl`. Treated as a literal string (no regex).
+</ParamField>
+
+<ParamField query="isActive" type="boolean">
+  Filter by active state. `true` returns only active URLs, `false` returns only inactive. Omit to return all. Values other than `true`/`false` return `400 VALIDATION_ERROR`.
+</ParamField>
+
+### Response — `200 OK`
+
+Returns an array of `URLResponse` objects plus a pagination `meta` block.
+
+<ResponseField name="data" type="URLResponse[]">
+  Paginated array of URL records. See [URLResponse fields](#urlresponse-fields).
+</ResponseField>
+
+<ResponseField name="meta" type="object">
+  Pagination metadata.
+
+  <Expandable title="meta fields">
+    <ResponseField name="meta.page" type="integer">
+      Current page number.
+    </ResponseField>
+    <ResponseField name="meta.limit" type="integer">
+      Page size used for this response.
+    </ResponseField>
+    <ResponseField name="meta.total" type="integer">
+      Total number of matching URLs (after filters).
+    </ResponseField>
+    <ResponseField name="meta.totalPages" type="integer">
+      Total number of pages given the current `limit`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```bash
+# List all URLs, second page
+curl -s "http://localhost:8080/api/v1/urls?page=2&limit=10" \
+  -H "Authorization: Bearer <access-token>"
+
+# Search for a specific URL with active filter
+curl -s "http://localhost:8080/api/v1/urls?search=launch&isActive=true" \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## GET /api/v1/urls/check-alias
+
+<span className="method-badge method-get">GET</span> `/api/v1/urls/check-alias`
+
+Checks whether a custom alias is available before creating a URL. Use this in form validation to give users real-time feedback without triggering a full URL creation.
+
+### Query parameters
+
+<ParamField query="alias" type="string" required>
+  The alias to check. Returns `400 VALIDATION_ERROR` if omitted.
+</ParamField>
+
+### Response — `200 OK`
+
+<ResponseField name="alias" type="string">
+  The alias that was checked, echoed back.
+</ResponseField>
+
+<ResponseField name="available" type="boolean">
+  `true` if the alias is free to use, `false` if it is already taken.
+</ResponseField>
+
+```bash
+curl -s "http://localhost:8080/api/v1/urls/check-alias?alias=my-link" \
+  -H "Authorization: Bearer <access-token>"
+# {"success":true,"data":{"alias":"my-link","available":true},"error":null}
+```
+
+---
+
+## GET /api/v1/urls/code/{shortCode}
+
+<span className="method-badge method-get">GET</span> `/api/v1/urls/code/{shortCode}`
+
+Returns the full metadata and QR code for a single URL owned by the authenticated user. Feeds the URL detail screen in the Quikko dashboard.
+
+<Warning>
+  A URL that belongs to another user or does not exist returns `403 FORBIDDEN` — Quikko intentionally does not distinguish between "not found" and "not yours" to avoid leaking short code existence.
+</Warning>
+
+### Path parameters
+
+<ParamField path="shortCode" type="string" required>
+  The short code of the URL to retrieve (e.g. `xYz12A`).
+</ParamField>
+
+### Response — `200 OK`
+
+Returns a full `URLResponse` object including the base64-encoded QR code. See [URLResponse fields](#urlresponse-fields).
+
+```bash
+curl -s http://localhost:8080/api/v1/urls/code/xYz12A \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## PATCH /api/v1/urls/{id}/active
+
+<span className="method-badge method-patch">PATCH</span> `/api/v1/urls/{id}/active`
+
+Activates or deactivates a short URL. The Redis redirect cache is kept in sync automatically.
+
+- **Deactivating** a URL frees up one slot in the Free plan quota.
+- **Re-activating** a URL consumes one slot and may return `403 PLAN_LIMIT_EXCEEDED` if the quota is full.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  The MongoDB ObjectID hex string of the URL.
+</ParamField>
+
+### Request body
+
+<ParamField body="isActive" type="boolean" required>
+  `true` to activate, `false` to deactivate.
+</ParamField>
+
+### Response — `200 OK`
+
+Returns the standard envelope with `data: null`.
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing or malformed `isActive` field |
+| 401 | `AUTH_TOKEN_INVALID` | Missing or invalid Bearer token |
+| 403 | `FORBIDDEN` | URL belongs to another user or does not exist |
+| 403 | `PLAN_LIMIT_EXCEEDED` | Free plan quota reached when attempting to re-activate |
+
+```bash
+# Deactivate a URL
+curl -s -X PATCH http://localhost:8080/api/v1/urls/64f1a2b3c4d5e6f7a8b9c0d1/active \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"isActive": false}'
+```
+
+---
+
+## DELETE /api/v1/urls/{id}
+
+<span className="method-badge method-delete">DELETE</span> `/api/v1/urls/{id}`
+
+Permanently deletes a short URL, removes it from MongoDB, and purges its entry from the Redis redirect cache. This action cannot be undone.
+
+### Path parameters
+
+<ParamField path="id" type="string" required>
+  The MongoDB ObjectID hex string of the URL to delete.
+</ParamField>
+
+### Response — `200 OK`
+
+Returns the standard envelope with `data: null`.
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 401 | `AUTH_TOKEN_INVALID` | Missing or invalid Bearer token |
+| 403 | `FORBIDDEN` | URL belongs to another user or does not exist |
+
+```bash
+curl -s -X DELETE http://localhost:8080/api/v1/urls/64f1a2b3c4d5e6f7a8b9c0d1 \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## URLResponse fields
+
+The `URLResponse` object is returned by `POST /api/v1/urls`, `GET /api/v1/urls`, and `GET /api/v1/urls/code/{shortCode}`.
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectID hex string — use this as the `{id}` path parameter for `PATCH` and `DELETE` requests.
+</ResponseField>
+
+<ResponseField name="shortCode" type="string">
+  The short code portion of the URL, e.g. `xYz12A` or a custom alias like `launch-2025`.
+</ResponseField>
+
+<ResponseField name="shortUrl" type="string">
+  The fully qualified short URL, e.g. `http://localhost:8080/xYz12A`. This is the link you share.
+</ResponseField>
+
+<ResponseField name="originalUrl" type="string">
+  The destination URL the short link redirects to.
+</ResponseField>
+
+<ResponseField name="isCustomAlias" type="boolean">
+  `true` if a custom alias was specified at creation time, `false` for auto-generated codes.
+</ResponseField>
+
+<ResponseField name="isActive" type="boolean">
+  Whether the URL currently accepts redirects. Inactive URLs redirect visitors to a branded error page.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+
+<ResponseField name="totalClicks" type="integer">
+  Approximate total click count. Incremented via a fire-and-forget counter for low-latency redirects. For precise time-series click data use the [Analytics API](/api/analytics).
+</ResponseField>
+
+<ResponseField name="qrCodeBase64" type="string">
+  The QR code for `shortUrl` as a PNG data URI (`data:image/png;base64,...`). Generated on demand, not persisted. Returns an empty string if QR generation failed.
+</ResponseField>

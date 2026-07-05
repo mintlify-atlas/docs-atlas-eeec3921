@@ -1,0 +1,342 @@
+---
+title: "Auth API: Register, Login, and Account Management"
+sidebarTitle: "Auth"
+description: "REST endpoints for user registration, login, token refresh, account info, plan changes, password updates, and account deletion."
+---
+
+The Auth API manages user identity in Quikko. It issues JWT access and refresh tokens on registration and login, and provides endpoints to query account state, update passwords, change plans, and delete accounts. All responses use the standard JSON envelope — `{ "success": true, "data": {...}, "error": null }` — except empty-success operations where `data` is `null`.
+
+<Note>
+  The user's plan (`free` or `pro`) is **not** embedded in the JWT. It is read from the database on every protected operation, so plan changes take effect immediately without requiring a token refresh.
+</Note>
+
+---
+
+## POST /api/v1/auth/register
+
+<span className="method-badge method-post">POST</span> `/api/v1/auth/register`
+
+Creates a new user account with the **Free** plan and immediately issues a JWT access/refresh token pair. Rate limited per IP using the `AUTH_RATE_LIMIT_PER_MIN` environment variable.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  A valid email address. Must be unique — returns `409 AUTH_EMAIL_TAKEN` if already registered.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password. Minimum 8 characters.
+</ParamField>
+
+### Response — `201 Created`
+
+<ResponseField name="accessToken" type="string">
+  Short-lived JWT used in the `Authorization: Bearer` header for protected endpoints.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Long-lived token used to obtain a new access token via `POST /api/v1/auth/refresh`.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The newly created user record.
+
+  <Expandable title="user fields">
+    <ResponseField name="user.id" type="string">
+      MongoDB ObjectID hex string.
+    </ResponseField>
+    <ResponseField name="user.email" type="string">
+      The registered email address.
+    </ResponseField>
+    <ResponseField name="user.plan" type="string">
+      Always `"free"` on registration.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing or malformed fields |
+| 409 | `AUTH_EMAIL_TAKEN` | Email already registered |
+| 429 | `RATE_LIMIT_EXCEEDED` | Too many requests from this IP |
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alice@example.com", "password": "securePass1"}'
+```
+
+---
+
+## POST /api/v1/auth/login
+
+<span className="method-badge method-post">POST</span> `/api/v1/auth/login`
+
+Authenticates an existing user and returns a fresh token pair. To prevent user enumeration, the server returns the same `AUTH_INVALID_CREDENTIALS` error whether the email does not exist or the password is wrong. Rate limited per IP separately from registration (`LOGIN_RATE_LIMIT_PER_MIN`).
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The account's email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account's password.
+</ParamField>
+
+### Response — `200 OK`
+
+<ResponseField name="accessToken" type="string">
+  Short-lived JWT for authenticated requests.
+</ResponseField>
+
+<ResponseField name="refreshToken" type="string">
+  Long-lived token for obtaining new access tokens.
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  The authenticated user.
+
+  <Expandable title="user fields">
+    <ResponseField name="user.id" type="string">
+      MongoDB ObjectID hex string.
+    </ResponseField>
+    <ResponseField name="user.email" type="string">
+      The account email.
+    </ResponseField>
+    <ResponseField name="user.plan" type="string">
+      Current plan — `"free"` or `"pro"`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing or malformed fields |
+| 401 | `AUTH_INVALID_CREDENTIALS` | Wrong email or wrong password (indistinguishable) |
+| 429 | `RATE_LIMIT_EXCEEDED` | Too many login attempts from this IP |
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "alice@example.com", "password": "securePass1"}'
+```
+
+---
+
+## POST /api/v1/auth/refresh
+
+<span className="method-badge method-post">POST</span> `/api/v1/auth/refresh`
+
+Exchanges a valid refresh token for a **new access token**. The response contains only `accessToken` — no `refreshToken` and no `user` object. No rate limit is applied to this endpoint.
+
+### Request body
+
+<ParamField body="refreshToken" type="string" required>
+  A refresh token obtained from a previous `register` or `login` call.
+</ParamField>
+
+### Response — `200 OK`
+
+<ResponseField name="accessToken" type="string">
+  A new short-lived JWT. The refresh token itself is not rotated.
+</ResponseField>
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing `refreshToken` field |
+| 401 | `AUTH_TOKEN_EXPIRED` | Refresh token has expired — user must log in again |
+| 401 | `AUTH_TOKEN_INVALID` | Token is malformed or tampered |
+
+```bash
+curl -s -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refreshToken": "<your-refresh-token>"}'
+```
+
+---
+
+## GET /api/v1/auth/me
+
+<span className="method-badge method-get">GET</span> `/api/v1/auth/me`
+
+Returns the core profile of the currently authenticated user. Requires a valid `Authorization: Bearer` header.
+
+### Response — `200 OK`
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectID hex string.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The account email address.
+</ResponseField>
+
+<ResponseField name="plan" type="string">
+  Current plan — `"free"` or `"pro"`.
+</ResponseField>
+
+```bash
+curl -s http://localhost:8080/api/v1/auth/me \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## GET /api/v1/auth/me/summary
+
+<span className="method-badge method-get">GET</span> `/api/v1/auth/me/summary`
+
+Returns enriched account info including plan limits and aggregate usage stats. Used by the dashboard header and sidebar. Requires a valid Bearer token.
+
+### Response — `200 OK`
+
+<ResponseField name="email" type="string">
+  The account email address.
+</ResponseField>
+
+<ResponseField name="plan" type="string">
+  Current plan — `"free"` or `"pro"`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of account creation.
+</ResponseField>
+
+<ResponseField name="activeUrlsCount" type="integer">
+  Number of URLs currently in the `isActive: true` state.
+</ResponseField>
+
+<ResponseField name="activeUrlsLimit" type="integer | null">
+  Maximum active URLs allowed by the current plan. `null` for Pro (unlimited).
+</ResponseField>
+
+<ResponseField name="totalClicks" type="integer">
+  Sum of `totalClicks` across all of the user's URLs (approximate, fire-and-forget counter).
+</ResponseField>
+
+```bash
+curl -s http://localhost:8080/api/v1/auth/me/summary \
+  -H "Authorization: Bearer <access-token>"
+```
+
+---
+
+## PATCH /api/v1/auth/me/plan
+
+<span className="method-badge method-patch">PATCH</span> `/api/v1/auth/me/plan`
+
+Changes the authenticated user's plan. Returns the updated user object.
+
+<Note>
+  This endpoint is available to any authenticated user without payment validation — it is a testing convenience while Quikko does not yet have a payment gateway. In a production billing flow this would be restricted to privileged roles or a Stripe webhook.
+</Note>
+
+### Request body
+
+<ParamField body="plan" type="string" required>
+  Target plan. Must be `"free"` or `"pro"`.
+</ParamField>
+
+### Response — `200 OK`
+
+<ResponseField name="id" type="string">
+  MongoDB ObjectID hex string.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The account email.
+</ResponseField>
+
+<ResponseField name="plan" type="string">
+  The newly applied plan — `"free"` or `"pro"`.
+</ResponseField>
+
+```bash
+curl -s -X PATCH http://localhost:8080/api/v1/auth/me/plan \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"plan": "pro"}'
+```
+
+---
+
+## PATCH /api/v1/auth/me/password
+
+<span className="method-badge method-patch">PATCH</span> `/api/v1/auth/me/password`
+
+Changes the authenticated user's password. The current password must be provided and verified before the update is applied. Returns an empty-success response (`data: null`).
+
+### Request body
+
+<ParamField body="currentPassword" type="string" required>
+  The user's existing password for identity verification.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The replacement password. Minimum 8 characters.
+</ParamField>
+
+### Response — `200 OK`
+
+Returns the standard envelope with `data: null`. No payload is included on success.
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing fields or `newPassword` too short |
+| 401 | `AUTH_INVALID_CREDENTIALS` | `currentPassword` does not match the stored hash |
+| 401 | `AUTH_TOKEN_INVALID` | Bearer token is missing or invalid |
+
+```bash
+curl -s -X PATCH http://localhost:8080/api/v1/auth/me/password \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"currentPassword": "oldPass123", "newPassword": "newSecurePass1"}'
+```
+
+---
+
+## DELETE /api/v1/auth/me
+
+<span className="method-badge method-delete">DELETE</span> `/api/v1/auth/me`
+
+Permanently deletes the authenticated account and all associated data. Requires password confirmation for security.
+
+**Cascade behavior:** The service iterates every URL owned by the user, purges each short code from the Redis redirect cache, deletes all URLs from MongoDB, and finally removes the user record. Historical click data in InfluxDB is **not** deleted (out of scope).
+
+### Request body
+
+<ParamField body="password" type="string" required>
+  The account's current password for deletion confirmation.
+</ParamField>
+
+### Response — `200 OK`
+
+Returns the standard envelope with `data: null`.
+
+### Error codes
+
+| HTTP | Code | When |
+|------|------|------|
+| 400 | `VALIDATION_ERROR` | Missing `password` field |
+| 401 | `AUTH_INVALID_CREDENTIALS` | Password is incorrect |
+| 401 | `AUTH_TOKEN_INVALID` | Bearer token is missing or invalid |
+
+<Warning>
+  This action is irreversible. All URLs, custom aliases, and account settings are permanently removed. InfluxDB click history is retained but becomes orphaned.
+</Warning>
+
+```bash
+curl -s -X DELETE http://localhost:8080/api/v1/auth/me \
+  -H "Authorization: Bearer <access-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"password": "securePass1"}'
+```

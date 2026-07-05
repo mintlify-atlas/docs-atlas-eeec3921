@@ -1,0 +1,76 @@
+---
+title: "API Rate Limits and Throttling in Quikko"
+sidebarTitle: "Rate Limits"
+description: "Quikko enforces per-IP and per-user rate limits using Redis. Redirect, URL creation, login, and registration each have independent configurable limits."
+---
+
+Quikko uses Redis-backed rate limiting to protect all API endpoints from abuse. Limits are applied per-IP for public endpoints (redirect and authentication) and per-user for authenticated endpoints such as URL creation. Every limit is independently configurable via environment variables, so you can tune thresholds for your traffic profile without touching application code.
+
+## Rate limits reference
+
+| Endpoint | Scope | Default Limit | Env Variable |
+|----------|-------|---------------|--------------|
+| `GET /{code}` (redirect) | Per IP | 100 req/sec | `RATE_LIMIT_REDIRECT_PER_SEC` |
+| `POST /api/v1/urls` (create URL) | Per user | 20 req/min | `RATE_LIMIT_CREATE_PER_MIN` |
+| `POST /api/v1/auth/register` | Per IP | 5 req/min | `AUTH_RATE_LIMIT_PER_MIN` |
+| `POST /api/v1/auth/login` | Per IP | 5 req/min | `RATE_LIMIT_LOGIN_PER_MIN` |
+
+## Rate limit exceeded response
+
+When any rate limit is exceeded, the API responds with `HTTP 429` and the following JSON envelope:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "RATE_LIMIT_EXCEEDED",
+    "message": "Too many requests."
+  }
+}
+```
+
+The error code is always `RATE_LIMIT_EXCEEDED` regardless of which endpoint triggered it. Clients should implement exponential back-off when they receive a 429.
+
+## Why login and registration have separate limits
+
+Both `register` and `login` are rate-limited per IP, but they use **independent counters**. Login is the most sensitive endpoint to brute-force attacks because an adversary already possessing a valid email can attempt to guess the password; a shared counter with registration would allow an attacker to shift traffic to the registration endpoint to drain the combined bucket and effectively bypass the login cap. Keeping them separate ensures the login counter is never diluted by registration traffic.
+
+## Implementation details
+
+Rate limits are implemented as fixed-window counters stored in Redis using `INCR` + `EXPIRE`. On the first request of each window, the key's TTL is set to the window duration (1 second for redirect, 1 minute for all other limits). Subsequent requests in that window increment the counter; requests beyond the configured maximum receive a `429` immediately.
+
+If Redis is unavailable, the middleware **fails open** — requests are allowed through and the error is logged. This prevents a Redis outage from taking down the entire service, at the cost of temporarily unenforced rate limits.
+
+Because counters live in Redis rather than in-process memory, configuration changes take effect on the next window after the environment variable is updated and the server restarts — no code changes or redeployment required.
+
+## Adjusting limits
+
+Set the corresponding environment variables in your deployment to override the defaults. For example, to handle higher redirect throughput:
+
+```bash
+RATE_LIMIT_REDIRECT_PER_SEC=500
+```
+
+To tighten URL creation to 10 requests per minute:
+
+```bash
+RATE_LIMIT_CREATE_PER_MIN=10
+```
+
+All four variables can be combined in a single `.env` file or injected through your container orchestration layer:
+
+```bash
+RATE_LIMIT_REDIRECT_PER_SEC=500
+RATE_LIMIT_CREATE_PER_MIN=20
+AUTH_RATE_LIMIT_PER_MIN=5
+RATE_LIMIT_LOGIN_PER_MIN=5
+```
+
+<Warning>
+  The redirect rate limit (`RATE_LIMIT_REDIRECT_PER_SEC`) applies globally **per IP address**. A single user accessing many different short links counts against the same per-IP bucket. For high-traffic deployments — especially those behind a CDN or shared NAT — the default of 100 req/sec may be too low and could inadvertently throttle legitimate users. Increase `RATE_LIMIT_REDIRECT_PER_SEC` in production to match your expected peak redirect volume.
+</Warning>
+
+<Tip>
+  Mobile apps often route through carrier-grade NAT, meaning dozens or hundreds of real users share a single public IP. If your Quikko deployment serves a mobile client, consider raising `AUTH_RATE_LIMIT_PER_MIN` (registration) and `RATE_LIMIT_LOGIN_PER_MIN` (login) to avoid false-positive throttling on shared IPs. A value of `30`–`60` per minute is a reasonable starting point for most mobile audiences.
+</Tip>

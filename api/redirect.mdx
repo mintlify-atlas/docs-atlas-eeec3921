@@ -1,0 +1,69 @@
+---
+title: "Public Redirect Endpoint: GET /{code}"
+sidebarTitle: "Redirect"
+description: "The public redirect endpoint resolves a short code via Redis-first lookup and responds with HTTP 302. Click recording and GeoIP detection happen asynchronously."
+---
+
+The redirect endpoint is the highest-traffic path in Quikko. It resolves short codes from Redis (cache hit) or MongoDB (cache miss), responds with HTTP 302 immediately, and records click analytics asynchronously — keeping redirect latency minimal. No authentication is required; this is a fully public endpoint.
+
+---
+
+## GET /{code}
+
+<span className="method-badge method-get">GET</span> `/{code}`
+
+Resolves a Quikko short code and redirects the caller to the original destination URL. This route is mounted at the **root** of the server — not under `/api/v1` — so short URLs are as compact as `https://your-domain.com/xYz12A`.
+
+<Note>
+  Because Echo's router prioritizes static path segments, routes like `/api/v1/...`, `/health`, and `/docs` take precedence and never collide with the `/:code` catch-all parameter.
+</Note>
+
+### Path parameters
+
+<ParamField path="code" type="string" required>
+  The short code to resolve. For example, `xYz12A` or a custom alias like `launch-2025`.
+</ParamField>
+
+### Resolution order
+
+1. **Redis cache lookup** — the short code is looked up in Redis for a sub-millisecond response.
+2. **MongoDB fallback** — on a cache miss, the URL record is fetched from MongoDB and the result is written back to Redis for future requests.
+3. **HTTP 302 redirect** — the server responds immediately with a `Location` header pointing to the original URL.
+4. **Async click recording** — after the response is sent, Quikko fires a goroutine to:
+   - Resolve the visitor's country via GeoIP (with a Redis-backed result cache to avoid redundant lookups)
+   - Record the click event in InfluxDB (used by the Analytics API)
+   - Broadcast a real-time `click_event` message to any WebSocket subscribers watching this short code
+   - Increment the fast `totalClicks` counter on the URL document in MongoDB
+
+### Response codes
+
+| HTTP | Description |
+|------|-------------|
+| 302 | Redirect to the original URL via `Location` header |
+| 302 | URL not found — redirected to `{FRONTEND_URL}/link-no-encontrado` |
+| 302 | URL is deactivated — redirected to `{FRONTEND_URL}/link-inactivo` |
+| 429 | Rate limit exceeded — too many requests from this IP |
+
+<Note>
+  The `404` and `410` conditions do not return raw JSON to the browser. Because `GET /{code}` is the only endpoint a human opens directly in their browser, Quikko redirects error states to branded frontend pages (`/link-no-encontrado` and `/link-inactivo`) instead of exposing a JSON error envelope. A genuine 5xx server error still returns the standard JSON envelope for diagnostic purposes.
+</Note>
+
+### Rate limiting
+
+Requests are rate-limited per IP using a 1-second window. The limit is configurable via the `RATE_LIMIT_REDIRECT_PER_SEC` environment variable (default: 100 requests/second).
+
+### curl example
+
+```bash
+# Follow the redirect to the original URL (-L follows Location headers)
+curl -L http://localhost:8080/xYz12A
+
+# Inspect the raw 302 response without following the redirect
+curl -v http://localhost:8080/xYz12A
+# < HTTP/1.1 302 Found
+# < Location: https://example.com/your-original-url
+```
+
+<Note>
+  **Async analytics and click counts:** The `totalClicks` field on a URL (returned by the URLs API) is a fire-and-forget counter incremented after the redirect is served. It may lag slightly under high concurrency. For precise, time-series click data — including breakdown by country, device, and browser — use the [Analytics API](/api/analytics).
+</Note>

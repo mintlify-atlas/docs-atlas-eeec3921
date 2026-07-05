@@ -1,0 +1,214 @@
+---
+title: "Environment Variables Reference for Quikko"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all Quikko backend environment variables including server, database, JWT, GeoIP, rate limits, and plan configuration."
+---
+
+Quikko's Go backend loads all configuration from environment variables at startup. Copy `server/.env.example` to `server/.env` for local development. In production, set variables in your hosting environment — no `.env` file is required.
+
+```ini server/.env.example
+# Server
+PORT=8080
+ENV=development
+# Base pública usada para construir el shortUrl devuelto al cliente
+BASE_URL=http://localhost:8080
+# Base del frontend Next.js. El redirect (GET /:code) manda ahí los errores de negocio
+# (link inexistente/inactivo) para mostrar páginas con marca en vez de JSON crudo.
+FRONTEND_URL=http://localhost:3000
+# CORS: orígenes permitidos del frontend, separados por coma. NUNCA usar "*"
+# (incompatible con credentials/cookies si se habilitan en el futuro).
+ALLOWED_ORIGINS=http://localhost:3000
+
+# Mongo
+MONGO_URI=mongodb://localhost:27017
+MONGO_DB_NAME=url_shortener
+
+# Redis
+REDIS_ADDR=localhost:6379
+REDIS_PASSWORD=
+REDIS_DB=0
+
+# InfluxDB
+# El token debe coincidir con DOCKER_INFLUXDB_INIT_ADMIN_TOKEN de docker-compose.yml
+INFLUX_URL=http://localhost:8086
+INFLUX_TOKEN=dev-influx-token-change-me
+INFLUX_ORG=url-shortener
+INFLUX_BUCKET=clicks
+
+# JWT
+JWT_SECRET=cambia-esto-por-un-secreto-largo-y-aleatorio
+JWT_ACCESS_TOKEN_TTL=15m
+JWT_REFRESH_TOKEN_TTL=7d
+
+# GeoIP (Agent 31): el país de cada clic se resuelve vía el servicio externo
+# https://ipapi.co (sin API key) y se cachea en Redis 48h. Timeout de cada llamada
+# HTTP externa, en segundos (acota la goroutine async del redirect; default 8).
+GEOIP_HTTP_TIMEOUT_SECONDS=8
+
+# Rate limiting
+RATE_LIMIT_REDIRECT_PER_SEC=100
+RATE_LIMIT_CREATE_PER_MIN=20
+# Intentos de REGISTRO permitidos por IP por minuto (anti brute-force)
+AUTH_RATE_LIMIT_PER_MIN=5
+# Intentos de LOGIN permitidos por IP por minuto. Contador propio (separado del de
+# registro) porque login es el endpoint más sensible a fuerza bruta de contraseñas.
+RATE_LIMIT_LOGIN_PER_MIN=5
+
+# Planes
+# Máximo de URLs activas simultáneas para el plan Free (Pro no tiene límite)
+FREE_PLAN_MAX_ACTIVE_URLS=5
+```
+
+<Warning>
+  `MONGO_URI`, `INFLUX_TOKEN`, and `JWT_SECRET` are required. The server exits
+  at startup if any of these three variables are missing or empty.
+</Warning>
+
+## Server
+
+<ParamField path="PORT" type="string" default="8080">
+  HTTP port the Go server listens on.
+</ParamField>
+
+<ParamField path="ENV" type="string" default="development">
+  Runtime environment. Accepted values: `development` or `production`. Controls
+  logging format and behavior — use `production` for all deployed environments.
+</ParamField>
+
+<ParamField path="BASE_URL" type="string" default="http://localhost:8080">
+  Public base URL used to build the short URLs returned to clients. In
+  production this should be your short-link domain, e.g. `https://sho.rt`.
+</ParamField>
+
+<ParamField path="FRONTEND_URL" type="string" default="http://localhost:3000">
+  Next.js frontend URL. When a redirect fails (link not found or inactive), the
+  backend redirects to this URL instead of returning raw JSON, so users see a
+  branded error page.
+</ParamField>
+
+<ParamField path="ALLOWED_ORIGINS" type="string" default="http://localhost:3000">
+  Comma-separated CORS allowlist. Specify explicit origins — never use `*`.
+  Example: `https://app.yourdomain.com` or
+  `https://app.yourdomain.com,https://www.yourdomain.com`.
+</ParamField>
+
+## MongoDB
+
+<ParamField path="MONGO_URI" type="string" required>
+  MongoDB connection string. Required — the server will not start without this
+  value. Example: `mongodb+srv://user:pass@cluster.mongodb.net` for MongoDB
+  Atlas or `mongodb://localhost:27017` for a local instance.
+</ParamField>
+
+<ParamField path="MONGO_DB_NAME" type="string" default="url_shortener">
+  Name of the MongoDB database Quikko will use for users and URLs.
+</ParamField>
+
+## Redis
+
+<ParamField path="REDIS_ADDR" type="string" default="localhost:6379">
+  Redis server address in `host:port` format. Redis is used as the redirect
+  cache and for all rate-limiting counters.
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string" default="">
+  Redis authentication password. Leave empty when Redis requires no
+  authentication (the default for local development).
+</ParamField>
+
+<ParamField path="REDIS_DB" type="integer" default="0">
+  Redis logical database index (0–15). Useful for isolating Quikko data when
+  the Redis instance is shared with other applications.
+</ParamField>
+
+## InfluxDB
+
+<ParamField path="INFLUX_URL" type="string" default="http://localhost:8086">
+  InfluxDB 2.x instance URL. Used to write and query time-series click event
+  data that powers the analytics dashboard.
+</ParamField>
+
+<ParamField path="INFLUX_TOKEN" type="string" required>
+  InfluxDB API token. Required — must match the token configured when the
+  InfluxDB instance was initialised. In the Docker Compose setup this is
+  `DOCKER_INFLUXDB_INIT_ADMIN_TOKEN`.
+</ParamField>
+
+<ParamField path="INFLUX_ORG" type="string" default="url-shortener">
+  InfluxDB organization name. Must match the organisation created during
+  InfluxDB initialisation.
+</ParamField>
+
+<ParamField path="INFLUX_BUCKET" type="string" default="clicks">
+  InfluxDB bucket where click events are stored. Each redirect writes an
+  asynchronous data point to this bucket.
+</ParamField>
+
+## JWT
+
+<ParamField path="JWT_SECRET" type="string" required>
+  Secret key used to sign and verify JSON Web Tokens. Required — use a long,
+  random string in production (see tip below). Never reuse this value across
+  environments.
+</ParamField>
+
+<ParamField path="JWT_ACCESS_TOKEN_TTL" type="duration" default="15m">
+  Lifetime of short-lived access tokens. Accepts Go duration strings suffixed
+  with `s`, `m`, or `h` (e.g. `15m`, `1h`).
+</ParamField>
+
+<ParamField path="JWT_REFRESH_TOKEN_TTL" type="duration" default="7d">
+  Lifetime of long-lived refresh tokens. Accepts the same duration strings as
+  `JWT_ACCESS_TOKEN_TTL`, plus a `d` suffix for days (e.g. `7d`, `30d`).
+</ParamField>
+
+## GeoIP
+
+<ParamField path="GEOIP_HTTP_TIMEOUT_SECONDS" type="integer" default="8">
+  Timeout in seconds for outbound GeoIP lookups made to
+  [ipapi.co](https://ipapi.co). Each lookup runs asynchronously in a goroutine
+  during a redirect so it never blocks the response. Results are cached in Redis
+  for 48 hours. Reduce this value on high-latency networks.
+</ParamField>
+
+## Rate Limiting
+
+<ParamField path="RATE_LIMIT_REDIRECT_PER_SEC" type="integer" default="100">
+  Maximum number of redirect requests (`GET /:code`) allowed per second per IP
+  address. Protects the most frequently called endpoint against abuse.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_CREATE_PER_MIN" type="integer" default="20">
+  Maximum number of URL creation requests allowed per minute per authenticated
+  user.
+</ParamField>
+
+<ParamField path="AUTH_RATE_LIMIT_PER_MIN" type="integer" default="5">
+  Maximum number of registration attempts allowed per minute per IP address.
+  Guards against automated account creation.
+</ParamField>
+
+<ParamField path="RATE_LIMIT_LOGIN_PER_MIN" type="integer" default="5">
+  Maximum number of login attempts allowed per minute per IP address. This
+  counter is intentionally separate from the registration counter because the
+  login endpoint is the most sensitive to password brute-force attacks.
+</ParamField>
+
+## Plans
+
+<ParamField path="FREE_PLAN_MAX_ACTIVE_URLS" type="integer" default="5">
+  Maximum number of simultaneously active short URLs allowed for Free plan
+  users. Pro plan users have no limit. Increase or decrease this value to
+  adjust your platform's free tier without redeploying.
+</ParamField>
+
+<Tip>
+  Generate a strong `JWT_SECRET` for production with a single command:
+
+  ```bash
+  openssl rand -hex 32
+  ```
+
+  Store the output in your hosting environment's secrets manager and never
+  commit it to source control.
+</Tip>

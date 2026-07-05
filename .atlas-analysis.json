@@ -1,0 +1,112 @@
+{
+  "projectType": "saas",
+  "projectName": "Quikko",
+  "projectDescription": "A full-stack URL shortener platform with a high-performance Go backend, real-time analytics dashboard, WebSocket-powered live updates, and a Next.js frontend.",
+  "theme": "luma",
+  "primaryColor": "#6d2ddb",
+  "lightColor": "#bfdc8b",
+  "darkColor": "#8c947c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/url-shortening",
+              "features/analytics",
+              "features/realtime",
+              "features/qr-codes"
+            ]
+          },
+          {
+            "group": "Configuration & Deployment",
+            "pages": [
+              "deployment/environment-variables",
+              "deployment/docker",
+              "deployment/production"
+            ]
+          },
+          {
+            "group": "Plans & Limits",
+            "pages": [
+              "plans/overview",
+              "plans/rate-limits"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/auth",
+              "api/urls",
+              "api/analytics",
+              "api/redirect",
+              "api/system"
+            ]
+          },
+          {
+            "group": "Real-time",
+            "pages": [
+              "api/websocket"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "High-performance URL shortening with Redis-backed redirect resolution",
+    "Real-time analytics powered by InfluxDB (clicks by country, device, browser)",
+    "Live dashboard updates via WebSocket hub",
+    "JWT-based authentication with access + refresh token flow",
+    "Custom alias support for branded short links",
+    "Automatic QR code generation for every short URL",
+    "CSV export of analytics metrics",
+    "GeoIP click tracking via external service with Redis cache",
+    "Plan-based limits (Free: 5 active URLs / 24h analytics; Pro: unlimited)",
+    "Docker Compose infrastructure for local development",
+    "OpenAPI 3.0 spec with Swagger UI at /docs"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/auth/register",
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/refresh",
+    "GET /api/v1/auth/me",
+    "DELETE /api/v1/auth/me",
+    "PATCH /api/v1/auth/me/plan",
+    "PATCH /api/v1/auth/me/password",
+    "GET /api/v1/auth/me/summary",
+    "POST /api/v1/urls",
+    "GET /api/v1/urls",
+    "GET /api/v1/urls/check-alias",
+    "GET /api/v1/urls/code/{shortCode}",
+    "PATCH /api/v1/urls/{id}/active",
+    "DELETE /api/v1/urls/{id}",
+    "GET /api/v1/analytics/stats",
+    "GET /api/v1/analytics/stats/export",
+    "GET /{code}",
+    "GET /health",
+    "GET /ws"
+  ]
+}

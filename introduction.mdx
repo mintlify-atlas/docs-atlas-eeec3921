@@ -1,0 +1,75 @@
+---
+title: "Quikko: High-Performance URL Shortener Platform"
+sidebarTitle: "Introduction"
+description: "Quikko is a full-stack URL shortener with a Go backend, Next.js dashboard, Redis caching, InfluxDB analytics, and real-time WebSocket updates."
+---
+
+Quikko is a modern, full-stack URL shortener platform engineered for speed and observability. The Go backend resolves redirects in sub-millisecond time by consulting Redis before touching any database, while InfluxDB captures every click as a time-series event and WebSockets push those metrics to the dashboard the instant they happen — no polling required. Whether you need a self-hosted link management tool or a foundation to build on, Quikko ships with everything: authentication, QR code generation, GeoIP detection, CSV export, and a fully documented REST API.
+
+## Key Capabilities
+
+<CardGroup cols={2}>
+  <Card title="URL Shortening" icon="link" href="/features/url-shortening">
+    Create, edit, activate, deactivate, and delete short links. Automatic QR
+    code generation and strict URL validation are included out of the box.
+  </Card>
+  <Card title="Real-Time Analytics" icon="chart-line" href="/features/analytics">
+    Every click is recorded to InfluxDB with timestamp, country, browser,
+    OS, and device data. Query per-URL or global statistics from the dashboard.
+  </Card>
+  <Card title="Live Dashboard" icon="bolt" href="/features/realtime">
+    A persistent WebSocket connection pushes click events to every connected
+    client the moment they are recorded — no page refresh needed.
+  </Card>
+  <Card title="QR Codes" icon="qrcode" href="/features/qr-codes">
+    Each short URL is automatically paired with a QR code, ready for
+    download and embedding in print or digital materials.
+  </Card>
+  <Card title="Docker-Ready Infra" icon="docker" href="/deployment/docker">
+    A single `docker compose up -d` spins up MongoDB, Redis, and InfluxDB so
+    you can run the full platform locally in minutes.
+  </Card>
+  <Card title="OpenAPI / REST" icon="code" href="/api/overview">
+    The entire API is documented with OpenAPI and served interactively via
+    Swagger UI at <code>/docs</code>.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+| Backend | Frontend |
+|---------|----------|
+| Go | Next.js 16 |
+| Echo | React 19 |
+| MongoDB | TypeScript |
+| Redis | Tailwind CSS v4 |
+| InfluxDB | Zustand |
+| JWT | Framer Motion |
+| WebSocket | D3.js |
+| Docker | — |
+
+## Architecture Overview
+
+Quikko is organized as a **monorepo** with two independent applications:
+
+- **`quikko/server/`** — Go REST API built on Clean Architecture principles. Each domain (Auth, URL Shortener, Redirect, Analytics, Realtime) is fully isolated, and infrastructure adapters (MongoDB, Redis, InfluxDB) are injected at startup.
+- **`quikko/client/`** — Next.js App Router dashboard. UI components never call the backend directly; all HTTP traffic flows through a centralized API client, then into domain-specific Zustand stores.
+
+Both applications can be run independently or together as a unified platform. See the [Architecture](/architecture) page for a detailed breakdown of the data flow.
+
+## Live Demo
+
+| Application | URL |
+|-------------|-----|
+| Dashboard | [quikko.vercel.app](https://quikko.vercel.app) |
+| Swagger UI | [quikko-production.up.railway.app/docs](https://quikko-production.up.railway.app/docs) |
+| Health Check | [quikko-production.up.railway.app/health](https://quikko-production.up.railway.app/health) |
+
+<Tip>
+  The demo environment is automatically deployed from the latest commit on the
+  `main` branch, so it always reflects the current state of the project.
+</Tip>
+
+## License
+
+Quikko is open-source software released under the **MIT License**. You are free to use, modify, and distribute it for personal or commercial projects. See the `LICENSE` file in the repository root for full terms.

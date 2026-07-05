@@ -1,0 +1,156 @@
+---
+title: "Quikko REST API Overview and Response Format"
+sidebarTitle: "Overview"
+description: "The Quikko REST API lives at /api/v1. All responses use a standard JSON envelope with success, data, error, and optional meta fields."
+---
+
+The Quikko API is a REST API served by the Go/Echo backend. Every authenticated endpoint requires a JWT Bearer token in the `Authorization` header. With the exception of the short-code redirect and the CSV analytics export, every response uses a standard JSON envelope so that clients can handle success and error paths uniformly.
+
+## Base URL
+
+| Environment | URL |
+|-------------|-----|
+| Development | `http://localhost:8080` |
+| Production  | Set the `BASE_URL` environment variable |
+
+## API Prefix
+
+All REST endpoints are mounted under `/api/v1`. Three special endpoints live at the server root and do **not** carry this prefix:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /{code}` | Public short-URL redirect (no `/api/v1` prefix) |
+| `GET /health` | Readiness healthcheck — returns `{ "status": "ok" }` |
+| `GET /ws` | WebSocket upgrade for real-time click events |
+
+## Standard Response Envelope
+
+Every JSON response wraps its payload in a consistent envelope:
+
+```json
+{
+  "success": true,
+  "data": { ... },
+  "error": null,
+  "meta": null
+}
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `success` | `boolean` | `true` on success, `false` on any error |
+| `data` | `object \| array \| null` | Populated when `success` is `true`; `null` on error |
+| `error` | `object \| null` | Populated when `success` is `false`; `null` on success |
+| `meta` | `object \| null` | Present only on paginated list responses; omitted otherwise |
+
+### Error Response
+
+When `success` is `false`, the `error` object contains a stable machine-readable `code` and a human-readable `message`:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Invalid request body."
+  }
+}
+```
+
+## Pagination
+
+Paginated list endpoints accept the following query parameters:
+
+| Parameter | Default | Maximum | Description |
+|-----------|---------|---------|-------------|
+| `page` | `1` | — | Page number (1-indexed) |
+| `limit` | `20` | `100` | Results per page (clamped to maximum) |
+
+When pagination applies, the `meta` field is included in the response alongside `data`:
+
+```json
+{
+  "success": true,
+  "data": [ ... ],
+  "error": null,
+  "meta": {
+    "page": 1,
+    "limit": 20,
+    "total": 134,
+    "totalPages": 7
+  }
+}
+```
+
+`meta.total` and `meta.totalPages` always reflect the count after any active filters (search, `isActive`, etc.) have been applied.
+
+## HTTP Status Codes
+
+| Status | Meaning |
+|--------|---------|
+| `200` | Success |
+| `201` | Resource created |
+| `400` | Validation error or invalid parameters |
+| `401` | Missing, malformed, or expired token |
+| `403` | Access forbidden (resource belongs to another user, or plan restriction) |
+| `404` | Resource not found |
+| `409` | Conflict (e.g. email or alias already taken) |
+| `410` | Gone (short URL has been deactivated) |
+| `429` | Rate limit exceeded |
+| `500` | Internal server error |
+
+## Error Code Reference
+
+| Code | Meaning |
+|------|---------|
+| `VALIDATION_ERROR` | Invalid request body or query parameters |
+| `AUTH_INVALID_CREDENTIALS` | Wrong email or password |
+| `AUTH_EMAIL_TAKEN` | Email already registered |
+| `AUTH_TOKEN_INVALID` | Missing or malformed JWT |
+| `AUTH_TOKEN_EXPIRED` | JWT has expired |
+| `PLAN_LIMIT_EXCEEDED` | Free plan active URL quota reached |
+| `PLAN_RANGE_NOT_ALLOWED` | Analytics time range not allowed on this plan |
+| `ALIAS_TAKEN` | Custom alias already in use |
+| `INVALID_URL` | URL failed validation (bad scheme, private host, or self-referencing) |
+| `FORBIDDEN` | Resource belongs to another user |
+| `URL_NOT_FOUND` | Short code does not exist |
+| `URL_INACTIVE` | Short URL has been deactivated |
+| `RATE_LIMIT_EXCEEDED` | Too many requests — back off and retry |
+| `INTERNAL_ERROR` | Unexpected server error |
+
+## Interactive Documentation
+
+The running server exposes a Swagger UI with a built-in request builder. No additional tooling is required to explore or test any endpoint.
+
+| Resource | URL |
+|----------|-----|
+| Swagger UI | `GET /docs` |
+| OpenAPI spec (YAML) | `GET /docs/openapi.yaml` |
+
+<Tip>
+  The OpenAPI spec is the authoritative source for request/response schemas. Download it from `/docs/openapi.yaml` to generate client SDKs with tools like `openapi-generator` or import it directly into Postman.
+</Tip>
+
+## Explore the API
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Learn how JWT tokens are issued, refreshed, and passed on every request.
+  </Card>
+  <Card title="Auth Endpoints" icon="user" href="/api/auth">
+    Register, login, refresh tokens, and manage your account.
+  </Card>
+  <Card title="URLs" icon="link" href="/api/urls">
+    Create, list, toggle, and delete short URLs with optional custom aliases.
+  </Card>
+  <Card title="Analytics" icon="chart-bar" href="/api/analytics">
+    Query aggregated click metrics by country, device, browser, and time bucket.
+  </Card>
+  <Card title="Redirect" icon="arrow-right" href="/api/redirect">
+    Public redirect endpoint — resolves a short code and returns a 302 response.
+  </Card>
+  <Card title="WebSocket" icon="bolt" href="/api/websocket">
+    Subscribe to real-time click events for your URLs over a persistent WebSocket connection.
+  </Card>
+</CardGroup>

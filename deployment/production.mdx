@@ -1,0 +1,170 @@
+---
+title: "Deploy Quikko to Production"
+sidebarTitle: "Production"
+description: "Deploy the Quikko Go backend with Docker and host the Next.js frontend on Vercel or Railway. Configure environment variables for production databases."
+---
+
+Quikko is designed for containerized production deployments. The Go backend ships with a multi-stage Dockerfile that produces a small, self-contained binary image based on Alpine Linux. The Next.js frontend deploys to Vercel or any Node-capable host. A reverse proxy — nginx, Caddy, or a cloud load balancer — sits in front of both, handling TLS termination and routing.
+
+## Dockerfile
+
+```dockerfile server/Dockerfile
+FROM golang:1.26.4 AS builder
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o server ./cmd/api
+
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=builder /app/server .
+
+COPY docs ./docs
+COPY data ./data
+
+EXPOSE 8080
+
+CMD ["./server"]
+```
+
+The build uses a two-stage pipeline: the `builder` stage compiles a fully static binary with `CGO_ENABLED=0`, and the final stage copies only the binary, the OpenAPI docs, and any required data files into a minimal Alpine image. The result is an image that is small and contains no Go toolchain at runtime.
+
+## Building the Docker image
+
+```bash
+cd server
+docker build -t quikko-server .
+```
+
+## Running the container
+
+Pass all required environment variables with `-e` flags or via an `--env-file`. At minimum you must supply `MONGO_URI`, `INFLUX_TOKEN`, and `JWT_SECRET` — the server will exit immediately without them.
+
+```bash
+docker run -p 8080:8080 \
+  -e MONGO_URI=mongodb+srv://... \
+  -e INFLUX_TOKEN=... \
+  -e JWT_SECRET=... \
+  -e BASE_URL=https://yourdomain.com \
+  -e FRONTEND_URL=https://app.yourdomain.com \
+  -e ALLOWED_ORIGINS=https://app.yourdomain.com \
+  quikko-server
+```
+
+<Warning>
+  Never set `ENV=development` in production. Development mode changes logging
+  behavior — structured JSON logs are replaced with human-readable output that
+  is unsuitable for log aggregation pipelines. Always set `ENV=production` in
+  deployed environments.
+</Warning>
+
+## Recommended production architecture
+
+A typical Quikko production stack looks like this:
+
+```text
+Internet
+    │
+    ▼
+Reverse Proxy (nginx / Caddy / cloud LB)
+    │
+    ├── Frontend  (Vercel / Next.js)
+    │
+    └── Backend   (Docker container / Railway)
+                       │
+              ┌────────┼────────┐
+              ▼        ▼        ▼
+           MongoDB   Redis   InfluxDB
+```
+
+<CardGroup cols={3}>
+  <Card title="MongoDB" icon="database">
+    Use **MongoDB Atlas** for a fully managed experience, or self-host MongoDB
+    with a replica set for high availability. Provide the connection string via
+    `MONGO_URI`.
+  </Card>
+  <Card title="Redis" icon="bolt">
+    **Upstash** (serverless, generous free tier), **Railway Redis**, or a
+    self-hosted Redis instance. Set `REDIS_ADDR` and optionally `REDIS_PASSWORD`.
+  </Card>
+  <Card title="InfluxDB" icon="chart-line">
+    **InfluxDB Cloud** for a managed time-series database, or self-host
+    **InfluxDB 2.x**. Supply the URL, token, org, and bucket via the `INFLUX_*`
+    variables.
+  </Card>
+</CardGroup>
+
+## Deployment platforms
+
+The backend container runs on any Docker-capable host. Common choices used for Quikko deployments:
+
+<CardGroup cols={2}>
+  <Card title="Railway" icon="train">
+    Connects directly to your GitHub repository and redeploys on every push to
+    `main`. Add environment variables in the Railway dashboard under the service
+    settings. No Docker registry required.
+  </Card>
+  <Card title="VPS with Docker" icon="server">
+    Suitable for DigitalOcean Droplets, Hetzner Cloud, Contabo, or any
+    Linux VPS. Install Docker, pull or build the image, and run it with a
+    `docker run` or `docker compose` command.
+  </Card>
+</CardGroup>
+
+## Health check
+
+The server exposes a lightweight health endpoint suitable for readiness and liveness probes:
+
+```bash
+curl https://yourdomain.com/health
+```
+
+```json
+{ "status": "ok" }
+```
+
+Configure your reverse proxy, load balancer, or container orchestrator to poll `GET /health` to determine when the container is ready to receive traffic.
+
+## Key production environment variables
+
+The following variables must be set correctly before going live. See [Environment Variables](/deployment/environment-variables) for the full reference including defaults for every variable.
+
+<ParamField path="BASE_URL" type="string" required>
+  Your public short-link domain, e.g. `https://sho.rt`. This value is embedded
+  in every shortened URL returned to clients — set it before creating any links.
+</ParamField>
+
+<ParamField path="FRONTEND_URL" type="string" required>
+  Your frontend domain, e.g. `https://app.yourdomain.com`. The backend redirects
+  404 and 410 errors here so users see a branded page instead of raw JSON.
+</ParamField>
+
+<ParamField path="ALLOWED_ORIGINS" type="string" required>
+  Your frontend domain for CORS, e.g. `https://app.yourdomain.com`. Comma-separate
+  multiple origins if needed. Never use `*`.
+</ParamField>
+
+<ParamField path="JWT_SECRET" type="string" required>
+  A long random secret used to sign all JWTs. Generate one with
+  `openssl rand -hex 32` and store it in your secrets manager.
+</ParamField>
+
+<ParamField path="ENV" type="string" default="development">
+  Set to `production` in all deployed environments to enable structured JSON
+  logging and production-appropriate error handling.
+</ParamField>
+
+<Tip>
+  The live Quikko demo backend at
+  [quikko-production.up.railway.app](https://quikko-production.up.railway.app)
+  is deployed on Railway from the `main` branch automatically on every push —
+  making Railway the fastest path to a live deployment if you want to follow
+  the same setup.
+</Tip>

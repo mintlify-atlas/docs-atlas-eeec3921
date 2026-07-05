@@ -1,0 +1,85 @@
+---
+title: "System Endpoints: Health Check and API Docs"
+sidebarTitle: "System"
+description: "Quikko exposes a health check at GET /health for readiness probes and serves the OpenAPI spec and Swagger UI at /docs."
+---
+
+Quikko includes two system-level endpoints outside the `/api/v1` namespace: a health check for infrastructure probes and a documentation UI for exploring the API interactively. Neither endpoint requires authentication.
+
+---
+
+## GET /health
+
+<span className="method-badge method-get">GET</span> `/health`
+
+Readiness probe endpoint. Returns a simple `{"status": "ok"}` JSON object with HTTP 200 when the server is running and able to accept requests.
+
+<Note>
+  This endpoint does **not** use the standard Quikko response envelope. It returns plain JSON — not `{"success": true, "data": {...}}` — to remain compatible with health-check tools that expect a minimal payload.
+</Note>
+
+### Response — `200 OK`
+
+```json
+{"status": "ok"}
+```
+
+### Usage
+
+<CardGroup cols={3}>
+  <Card title="Kubernetes" icon="dharmachakra">
+    Use as a `readinessProbe` or `livenessProbe` in your Pod spec to gate traffic until the server is fully started.
+  </Card>
+  <Card title="Load Balancer" icon="network-wired">
+    Configure your load balancer or reverse proxy to poll `/health` and remove the instance from rotation if it returns a non-200 status.
+  </Card>
+  <Card title="Uptime Monitoring" icon="chart-line">
+    Point any uptime-monitoring service (UptimeRobot, Better Uptime, Checkly) at `/health` for lightweight availability checks.
+  </Card>
+</CardGroup>
+
+```bash
+curl http://localhost:8080/health
+# {"status":"ok"}
+```
+
+---
+
+## GET /docs
+
+<span className="method-badge method-get">GET</span> `/docs`
+
+Serves the **Swagger UI** — an interactive API explorer loaded from CDN assets. Use it to browse every endpoint, read request/response schemas, and execute requests directly from your browser without writing any code.
+
+<Tip>
+  The live Swagger UI for the Quikko production instance is available at [https://quikko-production.up.railway.app/docs](https://quikko-production.up.railway.app/docs).
+</Tip>
+
+**Local development:** [http://localhost:8080/docs](http://localhost:8080/docs)
+
+**Production:** `https://<your-domain>/docs`
+
+---
+
+## GET /docs/openapi.yaml
+
+<span className="method-badge method-get">GET</span> `/docs/openapi.yaml`
+
+Serves the raw **OpenAPI 3.0 YAML specification** file.
+
+Use this URL to:
+- **Generate client SDKs** with tools like `openapi-generator` or `oapi-codegen`
+- **Import into Postman** — use *Import → Link* and paste the URL
+- **Import into Insomnia** — use *Import → From URL*
+- **Validate your integration** against the authoritative schema
+
+```bash
+# Download the OpenAPI spec
+curl -O http://localhost:8080/docs/openapi.yaml
+
+# Or pipe it directly into a code generator
+curl -s http://localhost:8080/docs/openapi.yaml | openapi-generator-cli generate \
+  -i /dev/stdin \
+  -g typescript-fetch \
+  -o ./generated-client
+```

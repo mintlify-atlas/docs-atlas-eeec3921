@@ -1,0 +1,113 @@
+---
+title: "Real-time Click Streaming via WebSocket"
+sidebarTitle: "Real-time Updates"
+description: "Quikko streams live click events to the dashboard over WebSocket. Every redirect broadcasts a click_event to all subscribed clients without polling."
+---
+
+Quikko's WebSocket hub broadcasts every click event to connected clients in real time. The Next.js dashboard opens a persistent WebSocket connection on load and updates charts and counters the instant a redirect fires — no polling interval, no page refresh. The same connection carries events for all of a user's URLs simultaneously, making the dashboard feel live regardless of how many links you're tracking.
+
+## How It Works
+
+When a visitor follows a short link, the redirect handler resolves the destination and immediately fires an async recording call. The analytics service writes the event to InfluxDB **and** calls `PublishClickEvent` on the hub. The hub fans the event out to two rooms: `user:{ownerID}` (the URL owner's personal room) and `url:{shortCode}` (the per-URL room). Any client subscribed to either room receives the message within milliseconds.
+
+```
+Visitor clicks short link
+        │
+        ▼
+  Redirect handler  ──(302)──▶  Visitor browser
+        │
+        └─ async RecordClick
+                  │
+                  ├──▶  InfluxDB  (persistent storage)
+                  │
+                  └──▶  WebSocket hub  ──▶  user:{ownerID} room
+                                       └──▶  url:{shortCode} room
+```
+
+## Connecting
+
+```
+ws://localhost:8080/ws?token=<accessToken>
+```
+
+The JWT access token travels as the `token` query parameter. This is intentional — browser WebSocket APIs do not allow custom headers during the HTTP upgrade handshake, so `Authorization: Bearer` cannot be used here. The token is validated **before** the upgrade completes; an invalid or expired token receives a standard `401` HTTP response and the connection is never upgraded.
+
+<Warning>
+  Treat the `token` query parameter the same as the `Authorization` header — it carries your full access credential. Only connect over `wss://` in production to prevent the token from being exposed in transit.
+</Warning>
+
+## Automatic User Room Subscription
+
+Immediately after a successful upgrade, the server subscribes the client to `user:{userID}` — derived automatically from the JWT claims. This means you start receiving live click events for **all** your short URLs with zero additional messages. No `subscribe` call is needed for the general dashboard view.
+
+## Optional Per-URL Subscription
+
+For URL detail views, you can subscribe to a specific URL's channel to receive a focused stream:
+
+```json
+{ "type": "subscribe", "payload": { "shortCode": "xYz12A" } }
+```
+
+The server validates that the `shortCode` belongs to the authenticated user before adding the client to the `url:{shortCode}` room. If the URL is not yours (or does not exist), the server sends back an `error` message and leaves the connection open — the connection is never dropped over a failed subscription.
+
+To stop receiving events for a URL:
+
+```json
+{ "type": "unsubscribe", "payload": { "shortCode": "xYz12A" } }
+```
+
+## Message Types
+
+| Type | Direction | Purpose |
+|---|---|---|
+| `subscribe` | client → server | Subscribe to a per-URL channel |
+| `unsubscribe` | client → server | Unsubscribe from a per-URL channel |
+| `click_event` | server → client | A redirect just fired on one of your URLs |
+| `error` | server → client | Protocol error (e.g. subscribing to another user's URL) |
+
+All messages share the same envelope:
+
+```json
+{ "type": "<type>", "payload": { ... } }
+```
+
+## The `click_event` Payload
+
+Every time a redirect fires for a URL you are subscribed to, the server pushes:
+
+```json
+{
+  "type": "click_event",
+  "payload": {
+    "shortCode": "xYz12A",
+    "country": "US",
+    "deviceType": "desktop",
+    "browser": "Chrome",
+    "timestamp": "2024-01-15T12:34:56Z"
+  }
+}
+```
+
+| Field | Description |
+|---|---|
+| `shortCode` | The short code that was clicked |
+| `country` | ISO 3166-1 alpha-2 country code of the visitor |
+| `deviceType` | `desktop`, `mobile`, or `tablet` |
+| `browser` | Browser family (Chrome, Firefox, Safari, Edge, …) |
+| `timestamp` | UTC time of the redirect |
+
+## Non-Blocking Broadcast
+
+The hub's `Broadcast` method uses a non-blocking `select/default` when writing to each client's send channel. If a client's buffer is full — for example, because it has stalled or is processing slowly — **that specific message is dropped for that client only**. All other clients in the room receive the event normally. The hub never blocks waiting on a slow consumer.
+
+<Warning>
+  In practice, dropped messages only occur when a client's network or JavaScript thread is severely backed up. The InfluxDB record of every click is always complete — the WebSocket stream is a live view, not the source of truth for analytics.
+</Warning>
+
+## Full Protocol Reference
+
+For the complete protocol specification including authentication error codes, unsubscribe behavior, and connection lifecycle details, see the [WebSocket Protocol reference](/api/websocket).
+
+<Tip>
+  The Next.js dashboard manages the WebSocket connection through a Zustand `realtime` store. The `useRealtimeClicks` hook subscribes to the store and automatically triggers chart re-renders whenever a `click_event` arrives, keeping all counters in sync without any manual polling or state juggling.
+</Tip>

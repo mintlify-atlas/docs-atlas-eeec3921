@@ -1,0 +1,113 @@
+---
+title: "Free and Pro Plans: Features and Limits"
+sidebarTitle: "Plans Overview"
+description: "Quikko offers Free and Pro plans. Free supports up to 5 active URLs with 24-hour analytics. Pro removes all limits and unlocks 7-day and 30-day analytics history."
+---
+
+Quikko provides two plans — Free and Pro — enforced server-side on every API call. The active URL limit and analytics time range are the primary differentiators between them. Plan enforcement happens entirely in the Go backend; no client-side trust is involved. The plan a user holds is read from the database on each operation, so it is never embedded in a JWT and cannot be spoofed by a tampered token.
+
+## Plan comparison
+
+| Feature | Free | Pro |
+|---------|------|-----|
+| Active URLs | Up to 5 | Unlimited |
+| Analytics range | 24 hours | 24h, 7d, 30d |
+| CSV export | ✓ | ✓ |
+| QR codes | ✓ | ✓ |
+| Real-time dashboard | ✓ | ✓ |
+| Custom aliases | ✓ | ✓ |
+
+## Free plan limits enforced
+
+The backend enforces two hard limits for Free plan users.
+
+**Active URL quota** — A Free account may hold at most 5 simultaneously active URLs. Attempting to exceed this quota in either of the following ways returns `HTTP 403`:
+
+- Creating a new URL via `POST /api/v1/urls` when the active URL count is already at the limit.
+- Re-activating a previously deactivated URL via `PATCH /api/v1/urls/{id}/active` — reactivation is treated the same as creation and consumes quota.
+
+The 403 response body carries the error code `PLAN_LIMIT_EXCEEDED`:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "PLAN_LIMIT_EXCEEDED",
+    "message": "Plan limit exceeded."
+  }
+}
+```
+
+**Analytics range** — Free accounts may only query analytics for the `24h` range. Requesting the `7d` or `30d` range via `GET /api/v1/analytics/stats` (or the CSV export endpoint) returns `HTTP 403` with error code `PLAN_RANGE_NOT_ALLOWED`:
+
+```json
+{
+  "success": false,
+  "data": null,
+  "error": {
+    "code": "PLAN_RANGE_NOT_ALLOWED",
+    "message": "Analytics range not allowed for your plan."
+  }
+}
+```
+
+## Changing plans
+
+Use `PATCH /api/v1/auth/me/plan` with a JSON body to switch plans:
+
+```bash
+curl -X PATCH https://<your-domain>/api/v1/auth/me/plan \
+  -H "Authorization: Bearer <accessToken>" \
+  -H "Content-Type: application/json" \
+  -d '{"plan": "pro"}'
+```
+
+Accepted values for `plan` are `"free"` and `"pro"`. The endpoint returns the updated user object.
+
+<Note>
+  This is a test/demo endpoint. No payment gateway is integrated in Quikko. Any authenticated user can freely switch between plans.
+</Note>
+
+## Account summary
+
+`GET /api/v1/auth/me/summary` returns the current plan alongside quota counters, making it ideal for building a quota progress UI:
+
+```bash
+curl https://<your-domain>/api/v1/auth/me/summary \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+A typical response for a Free user with 3 active URLs and 142 total clicks:
+
+```json
+{
+  "success": true,
+  "data": {
+    "email": "user@example.com",
+    "plan": "free",
+    "createdAt": "2024-11-01T10:00:00Z",
+    "activeUrlsCount": 3,
+    "activeUrlsLimit": 5,
+    "totalClicks": 142
+  },
+  "error": null
+}
+```
+
+For Pro accounts, `activeUrlsLimit` is `null` (no limit applies).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `plan` | `"free"` \| `"pro"` | Current plan |
+| `activeUrlsCount` | integer | Number of currently active URLs |
+| `activeUrlsLimit` | integer \| null | Quota ceiling; `null` for Pro |
+| `totalClicks` | integer | Lifetime click count across all URLs |
+
+<Note>
+  The active URL quota is controlled by the `FREE_PLAN_MAX_ACTIVE_URLS` environment variable, which defaults to `5`. You can raise or lower it without redeploying by updating the variable and restarting the server.
+</Note>
+
+<Tip>
+  Call `GET /api/v1/auth/me/summary` before rendering a "Create URL" form. The `activeUrlsCount` and `activeUrlsLimit` fields give you everything you need to show a quota indicator (e.g., "3 / 5 active URLs") and to disable the form preemptively for Free users who are at their limit — avoiding a round-trip `403` on submission.
+</Tip>

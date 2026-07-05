@@ -1,0 +1,135 @@
+---
+title: "URL Shortening: Aliases, Validation, and Redis Caching"
+sidebarTitle: "URL Shortening"
+description: "Create short URLs with auto-generated codes or custom aliases. Quikko validates every destination, enforces plan limits, and caches redirects in Redis."
+---
+
+Quikko's shortener turns any long URL into a compact, shareable link backed by a 7-character alphanumeric code or a user-supplied custom alias. Before a record is ever written to the database, every destination URL is validated against a strict set of rules. Once created, the short URL's mapping is immediately written to Redis so redirects resolve in single-digit milliseconds without touching MongoDB.
+
+## How Short Codes Are Generated
+
+Auto-generated short codes are produced by `GenerateCode` in `internal/shortener/shortcode.go`. The function draws cryptographically random bytes from `crypto/rand` (never `math/rand`) and maps each byte to a **base62 alphabet** of 62 characters — uppercase letters, lowercase letters, and digits (`ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789`).
+
+The default length is **7 characters**, which yields roughly **3.5 trillion** unique combinations. To eliminate modulo bias, any byte that falls outside the largest multiple of 62 that fits in a single byte is discarded and re-drawn, ensuring a perfectly uniform distribution across the alphabet.
+
+If a generated code collides with an existing one in MongoDB, the service retries automatically up to **5 times** before returning an error — collisions are astronomically rare at current scale.
+
+<CardGroup cols={2}>
+  <Card title="Base62 alphabet" icon="key">
+    `A–Z`, `a–z`, `0–9` — URL-safe characters with no padding or special symbols
+  </Card>
+  <Card title="Collision resistance" icon="shield-check">
+    7 characters × 62 symbols ≈ 3.5 trillion combinations with up to 5 auto-retries
+  </Card>
+</CardGroup>
+
+## Custom Aliases
+
+Instead of an auto-generated code, you can supply a `customAlias` in the request body. Custom aliases must be **3–30 characters** long and contain only alphanumeric characters and hyphens (`[a-zA-Z0-9-]`). If the alias is already taken, the API returns `409 ALIAS_TAKEN` with no retry — you must choose a different value.
+
+To check availability before submitting the full creation request, use the check endpoint:
+
+```bash
+GET /api/v1/urls/check-alias?alias=my-promo
+```
+
+```json
+{
+  "success": true,
+  "data": { "alias": "my-promo", "available": true },
+  "error": null
+}
+```
+
+## URL Validation Rules
+
+`ValidateOriginalURL` in `internal/shortener/url_validator.go` runs every destination URL through the following checks before any database or cache write occurs:
+
+| Rule | Detail |
+|---|---|
+| **Scheme** | Must be `http` or `https`. All other schemes (ftp, file, etc.) are rejected. |
+| **Private IP ranges** | Destinations resolving to RFC-1918 private addresses (`10/8`, `172.16/12`, `192.168/16`) are blocked. |
+| **Loopback addresses** | `localhost` and the loopback range (`127.0.0.0/8`, `::1`) are rejected. |
+| **Unspecified / link-local** | `0.0.0.0` and the `169.254.0.0/16` link-local range are blocked. |
+| **Self-referential links** | The service's own domain (configured as `BASE_URL`) cannot be used as a destination, preventing infinite redirect loops. |
+
+## Plan Limits
+
+<CardGroup cols={2}>
+  <Card title="Free plan" icon="circle">
+    Capped at `FREE_PLAN_MAX_ACTIVE_URLS` active short URLs (default **5**). Attempting to create a sixth returns `403 PLAN_LIMIT_EXCEEDED`.
+  </Card>
+  <Card title="Pro plan" icon="star">
+    Unlimited active short URLs. No quota checks are performed at creation or reactivation time.
+  </Card>
+</CardGroup>
+
+Reactivating a previously deactivated URL counts toward the same quota as creating a new one — the quota check runs on any transition from inactive → active.
+
+## Creating a Short URL
+
+### Auto-generated code
+
+```bash
+curl -X POST https://quikko.io/api/v1/urls \
+  -H "Authorization: Bearer <accessToken>" \
+  -H "Content-Type: application/json" \
+  -d '{"originalUrl": "https://example.com/very/long/path?with=params"}'
+```
+
+```json
+{
+  "success": true,
+  "data": {
+    "id": "6677e1a2f3b4c5d6e7f80001",
+    "shortCode": "aB3kR7m",
+    "shortUrl": "https://quikko.io/aB3kR7m",
+    "originalUrl": "https://example.com/very/long/path?with=params",
+    "isCustomAlias": false,
+    "isActive": true,
+    "createdAt": "2024-01-15T12:00:00Z",
+    "totalClicks": 0,
+    "qrCodeBase64": "data:image/png;base64,iVBORw0KGgo..."
+  },
+  "error": null
+}
+```
+
+### Custom alias
+
+```bash
+curl -X POST https://quikko.io/api/v1/urls \
+  -H "Authorization: Bearer <accessToken>" \
+  -H "Content-Type: application/json" \
+  -d '{"originalUrl": "https://example.com/campaign", "customAlias": "summer-sale"}'
+```
+
+## Activating and Deactivating URLs
+
+Send a `PATCH` request to toggle a URL's active state:
+
+```bash
+curl -X PATCH https://quikko.io/api/v1/urls/6677e1a2f3b4c5d6e7f80001/active \
+  -H "Authorization: Bearer <accessToken>" \
+  -H "Content-Type: application/json" \
+  -d '{"isActive": false}'
+```
+
+When a URL is deactivated, its Redis cache entry is deleted immediately. Any visitor who subsequently tries to follow the short link is redirected to the platform's **`/link-inactivo`** error page — not shown a raw `410` JSON response. Re-enabling the URL (`"isActive": true`) repopulates the Redis cache on the spot.
+
+<Warning>
+  Reactivating a URL on the Free plan counts against your active URL quota. If you are already at the limit, reactivation returns `403 PLAN_LIMIT_EXCEEDED` until you deactivate or delete another URL.
+</Warning>
+
+## Deleting URLs
+
+```bash
+curl -X DELETE https://quikko.io/api/v1/urls/6677e1a2f3b4c5d6e7f80001 \
+  -H "Authorization: Bearer <accessToken>"
+```
+
+Deleting a URL removes the MongoDB document **and** purges its Redis cache entry in a single operation. Historical click data stored in InfluxDB is not removed. Attempting to access the deleted short link returns a redirect to the **`/link-no-encontrado`** error page.
+
+<Note>
+  Every URL creation and detail response includes a `qrCodeBase64` field — a ready-to-use PNG data URI generated on demand. There is no separate API call to fetch a QR code. See the [QR Codes](/features/qr-codes) page for full details.
+</Note>

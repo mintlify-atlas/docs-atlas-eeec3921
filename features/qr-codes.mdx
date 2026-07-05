@@ -1,0 +1,102 @@
+---
+title: "Automatic QR Code Generation for Short URLs"
+sidebarTitle: "QR Codes"
+description: "Every Quikko short URL includes an on-demand QR code as a base64-encoded PNG data URI. No separate request needed — it ships with the URL creation response."
+---
+
+Every time you create or retrieve a short URL, Quikko automatically generates a QR code that encodes the full short link. The QR is returned as a **256×256 PNG image encoded as a base64 data URI** — ready to drop directly into an `<img>` tag or a download link. There is no separate endpoint to call and no polling required; the QR code ships alongside the URL metadata in a single response.
+
+## Where QR Codes Appear
+
+The `qrCodeBase64` field is present in two endpoints:
+
+<CardGroup cols={2}>
+  <Card title="POST /api/v1/urls" icon="plus">
+    The URL creation response. Every newly created short URL includes its QR code in the same `201` response body.
+  </Card>
+  <Card title="GET /api/v1/urls/code/{shortCode}" icon="magnifying-glass">
+    The URL detail endpoint. Fetches full metadata for a single URL by its short code, including a freshly generated QR code.
+  </Card>
+</CardGroup>
+
+## The `qrCodeBase64` Field
+
+The field value is a complete [data URI](https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/Data_URLs) — you can assign it directly to an `<img>` element's `src` attribute with no further processing:
+
+```json
+{
+  "qrCodeBase64": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEA..."
+}
+```
+
+The data URI always starts with the `data:image/png;base64,` prefix (set by `qrDataPrefix` in `internal/shortener/qrcode.go`), followed by the standard base64-encoded bytes of the PNG file.
+
+## QR Codes Are Not Persisted
+
+QR codes are generated on demand at request time using the `go-qrcode` library and are **never stored** in MongoDB, Redis, or any other store. The generation is fast enough (microseconds) that caching adds no meaningful benefit. If you need the QR code again later — for example, to display it on a detail page — simply call `GET /api/v1/urls/code/{shortCode}` and a fresh code is produced instantly.
+
+## Using the QR Code in JavaScript
+
+Because `qrCodeBase64` is a fully-formed data URI, rendering it requires only a single line:
+
+```js
+const img = document.createElement('img');
+img.src = urlResponse.data.qrCodeBase64;
+document.body.appendChild(img);
+```
+
+To offer a download button, convert the data URI to a Blob and create an object URL:
+
+```js
+async function downloadQR(qrDataURI, filename = 'qr-code.png') {
+  const res = await fetch(qrDataURI);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+
+  URL.revokeObjectURL(url);
+}
+
+downloadQR(urlResponse.data.qrCodeBase64, `qr-${urlResponse.data.shortCode}.png`);
+```
+
+## Handling Generation Failures
+
+QR generation is treated as a non-critical operation. If the underlying `go-qrcode` library returns an error, the `qrCodeBase64` field is set to an **empty string** rather than causing the whole URL creation request to fail. Always check the value before rendering:
+
+```js
+if (urlResponse.data.qrCodeBase64) {
+  img.src = urlResponse.data.qrCodeBase64;
+} else {
+  // Show a fallback or hide the QR section
+}
+```
+
+<Warning>
+  An empty `qrCodeBase64` does not mean the URL was not created — the short URL itself is fully functional. Only the QR image could not be generated. You can retry by fetching `GET /api/v1/urls/code/{shortCode}` again.
+</Warning>
+
+## In the Dashboard
+
+The Next.js dashboard displays the QR code on every URL detail page. A **Download** button converts the data URI to a PNG file download using the browser's native download API — no server round-trip required. This makes it straightforward to save the QR code for use in offline materials.
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Print materials" icon="print">
+    Embed the QR image directly into flyers, posters, or business cards. Visitors can scan to reach the destination without typing.
+  </Card>
+  <Card title="Presentations" icon="presentation-screen">
+    Drop the data URI into a slide deck image. No external hosting or separate download step needed.
+  </Card>
+  <Card title="Offline sharing" icon="wifi-slash">
+    Display QR codes on physical signage, product packaging, or event badges where URLs are impractical to type.
+  </Card>
+  <Card title="Instant preview" icon="eye">
+    The QR code is available immediately on creation — no polling or webhook required before handing off to a design workflow.
+  </Card>
+</CardGroup>
